@@ -15,6 +15,7 @@ from .utils import save_json
 
 
 def collect_train_labels(loader) -> List[int]:
+    print("----trainer------collect_train_labels")
     labels = []
     for batch in loader:
         labels.extend(batch["label"].numpy().tolist())

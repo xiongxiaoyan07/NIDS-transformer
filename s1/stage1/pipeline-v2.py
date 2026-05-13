@@ -42,20 +42,15 @@ def build_dataloaders(
     """
     safe_mkdir(out_dir)
 
-    # seed = int(cfg.get("seed", 42))
+    seed = int(cfg.get("seed", 42))
 
     data_cfg = cfg.get("data", {})
     split_cfg = cfg.get("split", {})
     train_cfg = cfg.get("training", {})
-    seq_cfg = cfg.get("sequence", {})
 
     flow_id_col = data_cfg.get("flow_id_col", "flow_id")
     label_col = data_cfg.get("label_col", "label")
     packet_time_col = data_cfg.get("packet_time_col", "timestamp_us")
-
-    max_seq_len = int(seq_cfg.get("max_seq_len", 64))
-    strategy = seq_cfg.get("strategy", "head")
-    seed = int(cfg.get("seed", 42))
 
     packets, flows = read_stage1_csvs(
         packet_csv=packet_csv,
@@ -63,9 +58,6 @@ def build_dataloaders(
         flow_id_col=flow_id_col,
         label_col=label_col,
         packet_time_col=packet_time_col,
-        max_seq_len = max_seq_len,
-        strategy = strategy,
-        seed = seed
     )
 
     has_external_test = external_packet_csv is not None and external_flow_csv is not None

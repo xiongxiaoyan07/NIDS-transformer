@@ -172,6 +172,7 @@ def _ensure_test_has_positive_if_possible(
     if test_has_positive:
         return
 
+    print("moving one positive from train/val into test")
     for src in ["train", "val"]:
         for fid in list(splits[src]):
             if id_to_label.get(fid, 0) == 1:

@@ -222,7 +222,7 @@ model:
 
 training:
   epochs: 20
-  batch_size: 64
+  batch_size: 128
   lr: 0.0001
   weight_decay: 0.0001
   num_workers: 0

@@ -1,11 +1,11 @@
+# data_io.py
 """
-CSV loading and cleaning.
+CSV loading, cleaning and per-flow packet truncation.
 """
 
 from __future__ import annotations
 
-from typing import Dict, Tuple, List
-
+from typing import Dict, Tuple, List, Literal
 import numpy as np
 import pandas as pd
 
@@ -16,6 +16,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     - Strip column names.
     - Drop Suricata record_type if present.
     - Replace inf/-inf with NaN.
+    - Remove flow_id == 0
     """
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
@@ -36,9 +37,13 @@ def read_stage1_csvs(
     flow_id_col: str,
     label_col: str,
     packet_time_col: str,
+    strategy: str = "head",
+    max_seq_len: int = 64,
+    seed: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     Read and clean stage1_packets.csv and stage1_flows.csv.
+    Apply per-flow packet truncation to save memory.
     """
     packets = clean_dataframe(pd.read_csv(packet_csv))
     flows = clean_dataframe(pd.read_csv(flow_csv))
@@ -68,14 +73,41 @@ def read_stage1_csvs(
     # Keep only flow IDs that exist in both files.
     # packet_ids = set(packets[flow_id_col].unique().tolist())
     flow_ids = set(flows[flow_id_col].unique().tolist())
-    # common_ids = packet_ids.intersection(flow_ids)
-    common_ids = flow_ids
+    packets = packets[packets[flow_id_col].isin(flow_ids)].copy()
+    flows = flows[flows[flow_id_col].isin(flow_ids)].copy()
 
-    packets = packets[packets[flow_id_col].isin(common_ids)].copy()
-    flows = flows[flows[flow_id_col].isin(common_ids)].copy()
+    # ---------- 按 flow 截取 packet ----------
+    if strategy not in {"head", "head_tail", "random"}:
+        raise ValueError("sequence.strategy must be one of: head, head_tail, random")
 
-    if len(flows) == 0:
-        raise ValueError("No common flow_id found between packet CSV and flow CSV.")
+    packets_list = []
+
+    for fid, group in packets.groupby(flow_id_col, sort=False):
+        df = group.sort_values(packet_time_col)
+        n = len(df)
+
+        if n <= max_seq_len:
+            packets_list.append(df)
+            continue
+
+        if strategy == "head":
+            packets_list.append(df.iloc[:max_seq_len])
+            continue
+
+        if strategy == "head_tail":
+            half = max_seq_len // 2
+            first = df.iloc[:half]
+            last = df.iloc[-(max_seq_len - half):]
+            packets_list.append(pd.concat([first, last], axis=0).sort_values(packet_time_col))
+            continue
+
+        # random
+        rng = np.random.default_rng(seed + int(fid) % 1000003)
+        chosen = rng.choice(n, size=max_seq_len, replace=False)
+        chosen = np.sort(chosen)
+        packets_list.append(df.iloc[chosen].sort_values(packet_time_col))
+
+    packets = pd.concat(packets_list, axis=0)
 
     return packets, flows
 
