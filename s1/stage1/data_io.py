@@ -8,7 +8,11 @@ from __future__ import annotations
 from typing import Dict, Tuple, List, Literal
 import numpy as np
 import pandas as pd
+import os
+import torch
+import joblib
 
+from .preprocessing import Stage1Preprocessor
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -116,3 +120,102 @@ def _ensure_columns(df: pd.DataFrame, required: List[str], name: str) -> None:
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"{name} missing required columns: {missing}")
+
+def generate_and_save_stage1_tensors(
+    packets: pd.DataFrame,
+    flows: pd.DataFrame,
+    flow_ids: list,
+    preprocessor: Stage1Preprocessor,
+    cfg: dict,
+    out_dir: str,
+    save_name_prefix: str = "stage1_precomputed",
+):
+    """
+    For each flow, precompute:
+        x: [max_seq_len, feature_dim]
+        time: [max_seq_len]
+        mask: [max_seq_len]
+        label: scalar
+
+    Save as .npz for reuse.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    seq_cfg = cfg.get("sequence", {})
+    max_seq_len = int(seq_cfg.get("max_seq_len", 64))
+    packet_iat_col = cfg["data"]["packet_iat_col"]
+    flow_id_col = cfg["data"]["flow_id_col"]
+    label_col = cfg["data"]["label_col"]
+
+    feature_dim = preprocessor.input_dim()
+    num_flows = len(flow_ids)
+
+    x_tensor = np.zeros((num_flows, max_seq_len, feature_dim), dtype=np.float32)
+    time_tensor = np.zeros((num_flows, max_seq_len), dtype=np.float32)
+    mask_tensor = np.zeros((num_flows, max_seq_len), dtype=bool)
+    labels = np.zeros((num_flows,), dtype=np.int64)
+    flow_id_tensor = np.zeros((num_flows,), dtype=np.int64)
+
+    flow_rows = {int(row[flow_id_col]): row for _, row in flows.iterrows()}
+
+    for idx, fid in enumerate(flow_ids):
+        pkt_df = packets[packets[flow_id_col] == fid].sort_values(cfg["data"]["packet_time_col"])
+        flow_df = pd.DataFrame([flow_rows[fid]])
+
+        packet_x = preprocessor.transform_packets(pkt_df)
+        flow_x = preprocessor.transform_flows(flow_df)
+        flow_x_tiled = np.repeat(flow_x, repeats=len(pkt_df), axis=0)
+        x = np.concatenate([packet_x, flow_x_tiled], axis=1).astype(np.float32)
+
+        # time log
+        if packet_iat_col in pkt_df.columns:
+            time_raw = pd.to_numeric(pkt_df[packet_iat_col], errors="coerce").fillna(0).clip(lower=0).to_numpy(dtype=np.float32)
+        else:
+            time_raw = np.zeros(len(pkt_df), dtype=np.float32)
+        time_log = np.log1p(time_raw).astype(np.float32)
+
+        real_len = min(len(pkt_df), max_seq_len)
+        x_tensor[idx, :real_len] = x[:real_len]
+        time_tensor[idx, :real_len] = time_log[:real_len]
+        mask_tensor[idx, :real_len] = True
+        labels[idx] = int(flow_rows[fid][label_col])
+        flow_id_tensor[idx] = fid
+
+    save_path = os.path.join(out_dir, f"{save_name_prefix}.npz")
+    np.savez_compressed(save_path,
+                        x=x_tensor,
+                        time=time_tensor,
+                        mask=mask_tensor,
+                        labels=labels,
+                        flow_ids=flow_id_tensor)
+    print(f"[INFO] saved precomputed stage1 tensors: {save_path}")
+    return save_path
+
+def get_or_generate_stage1_tensors(
+    packets: pd.DataFrame,
+    flows: pd.DataFrame,
+    flow_ids: List[int],
+    preprocessor: Stage1Preprocessor,
+    cfg: dict,
+    out_dir: str,
+    prefix: str
+) -> str:
+    """
+    If precomputed .npz exists, return its path.
+    Otherwise, generate and save.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    npz_path = os.path.join(out_dir, f"{prefix}.npz")
+    if os.path.exists(npz_path):
+        print(f"[INFO] found existing precomputed tensor: {npz_path}")
+        return npz_path
+
+    npz_path = generate_and_save_stage1_tensors(
+        packets=packets,
+        flows=flows,
+        flow_ids=flow_ids,
+        preprocessor=preprocessor,
+        cfg=cfg,
+        out_dir=out_dir,
+        save_name_prefix=prefix
+    )
+    return npz_path

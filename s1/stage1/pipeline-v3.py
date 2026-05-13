@@ -16,8 +16,8 @@ import joblib
 import pandas as pd
 from torch.utils.data import DataLoader
 
-from .data_io import read_stage1_csvs, get_or_generate_stage1_tensors
-from .dataset import PrecomputedFlowDataset
+from .data_io import read_stage1_csvs
+from .dataset import Stage1FlowDataset
 from .preprocessing import Stage1Preprocessor
 from .splits import stratified_train_val_test_split, train_val_split_for_external_test
 from .utils import safe_mkdir, save_json
@@ -116,28 +116,28 @@ def build_dataloaders(
     preprocessor = Stage1Preprocessor(cfg)
     preprocessor.fit(train_packets, train_flows)
 
-    # 在 build_dataloaders 内
-    save_dir = os.path.join(out_dir, "precomputed")
-
-    # train
-    train_npz = get_or_generate_stage1_tensors(
-        train_packets, train_flows, splits["train"], preprocessor, cfg, save_dir, "train"
-    )
-
-    # val
-    val_npz = get_or_generate_stage1_tensors(
-        train_packets, train_flows, splits["val"], preprocessor, cfg, save_dir, "val"
-    )
-
-    # test
-    test_npz = get_or_generate_stage1_tensors(
-        test_packets, test_flows, splits["test"], preprocessor, cfg, save_dir, "test"
-    )
-
     datasets = {
-        "train": PrecomputedFlowDataset(train_npz),
-        "val": PrecomputedFlowDataset(val_npz),
-        "test": PrecomputedFlowDataset(test_npz),
+        "train": Stage1FlowDataset(
+            packets=packets[packets[flow_id_col].isin(train_ids)].copy(),
+            flows=flows[flows[flow_id_col].isin(train_ids)].copy(),
+            flow_ids=splits["train"],
+            preprocessor=preprocessor,
+            cfg=cfg,
+        ),
+        "val": Stage1FlowDataset(
+            packets=packets[packets[flow_id_col].isin(val_ids)].copy(),
+            flows=flows[flows[flow_id_col].isin(val_ids)].copy(),
+            flow_ids=splits["val"],
+            preprocessor=preprocessor,
+            cfg=cfg,
+        ),
+        "test": Stage1FlowDataset(
+            packets=test_packets[test_packets[flow_id_col].isin(test_ids)].copy(),
+            flows=test_flows[test_flows[flow_id_col].isin(test_ids)].copy(),
+            flow_ids=splits["test"],
+            preprocessor=preprocessor,
+            cfg=cfg,
+        ),
     }
 
     batch_size = int(train_cfg.get("batch_size", 64))
