@@ -1,0 +1,84 @@
+%YAML 1.1
+---
+
+
+
+suricata-version: "8.0"
+vars:
+    address-groups:
+        # 将同事提供的 IP 段加入 HOME_NET
+        # 注意：IPv4 和 IPv6 可以混合放在一个数组中
+        HOME_NET: "[185.41.136.0/22, 185.239.60.0/22, 86.58.200.0/22, 2a01:52e0::/32]"
+
+        # 外部网络通常定义为“非本地网络”
+        EXTERNAL_NET: "!$HOME_NET"
+
+        # 服务器组建议细化。如果你确切知道这些服务器的 IP，请手动填入；
+        # 如果不确定，暂时维持为 $HOME_NET 比使用 any 要好。
+        HTTP_SERVERS: "$HOME_NET"
+        SMTP_SERVERS: "$HOME_NET"
+        SQL_SERVERS: "$HOME_NET"
+        DNS_SERVERS: "$HOME_NET"
+        # ... 其他保持不变
+        TELNET_SERVERS: "$HOME_NET"
+        AIM_SERVERS: "$EXTERNAL_NET"
+        DC_SERVERS: "$HOME_NET"
+        DNP3_SERVER: "$HOME_NET"
+        DNP3_CLIENT: "$HOME_NET"
+        MODBUS_CLIENT: "$HOME_NET"
+        MODBUS_SERVER: "$HOME_NET"
+        ENIP_CLIENT: "$HOME_NET"
+        ENIP_SERVER: "$HOME_NET"
+
+    port-groups:
+        HTTP_PORTS: "[80,8080,8000,8888]"      # 包含常见的 Web 和后台管理端口
+        SHELLCODE_PORTS: "!$HTTP_PORTS"        # 排除合法 Web 流量后的所有端口
+        ORACLE_PORTS: 1521
+        SSH_PORTS: "[22,2222]"                 # 如果你有自定义 SSH 端口
+        DNP3_PORTS: 20000
+        MODBUS_PORTS: 502
+        # 将端口汇总，方便 Suricata 提取文件流
+        FILE_DATA_PORTS: "[$HTTP_PORTS,110,143,21,445]" # 445 是 SMB，常用于内网文件传输
+        FTP_PORTS: 21
+        GENEVE_PORTS: 6081
+        VXLAN_PORTS: 4789
+        TEREDO_PORTS: 3544
+        DNS_PORTS: 53                          # 建议新增，用于 DNS 隧道检测
+        TLS_PORTS: 443                         # 建议新增，用于 HTTPS/TLS 解析
+
+
+plugins:
+  - /home/xxiong/my_plugin/custom-out.so
+
+af-packet:
+  - interface: ens3
+
+default-rule-path: /var/lib/suricata/rules
+rule-files:
+  - suricata.rules
+
+
+outputs:
+  - eve-log:
+      enabled: yes
+      filetype: regular
+      filename: /var/log/suricata/eve.json
+      # include the name of the input pcap file in pcap file processing mode
+      pcap-file: false
+      types: 
+        - alert
+        - flow
+        - dns
+        - ftp
+  - custom-packet-logger:
+      enabled: yes
+  - custom-flow-logger:
+      enabled: yes
+  - fast: {enabled: no}
+  - unified2-alert: {enabled: no}
+  - http-log: {enabled: no}
+  - tls-log: {enabled: no}
+  - dns-log: {enabled: no}
+
+classification-file: /usr/local/etc/suricata/classification.config
+reference-config-file: /usr/local/etc/suricata/reference.config
