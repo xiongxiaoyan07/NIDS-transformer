@@ -86,6 +86,9 @@ def stratified_train_val_test_split(
     }
 
     _ensure_test_has_positive_if_possible(splits, df, flow_id_col, label_col)
+
+    print("[INFO] splits.py ------ stratified_train_val_test_split")
+
     return splits
 
 

@@ -39,6 +39,8 @@ def classification_metrics(y_true: List[int], y_pred: List[int], y_score: List[f
     else:
         auc = float("nan")
 
+    print("[INFO] metircs.py ------ classification_metrics")
+
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "precision_label1": float(precision),

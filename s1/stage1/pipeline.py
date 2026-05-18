@@ -40,6 +40,9 @@ def build_dataloaders(
     Otherwise:
         - train/val/test are split from packet_csv/flow_csv
     """
+
+    print("[INFO] pipeline.py ------ build_dataloaders --- start")
+
     safe_mkdir(out_dir)
 
     # seed = int(cfg.get("seed", 42))
@@ -113,6 +116,12 @@ def build_dataloaders(
     train_packets = packets[packets[flow_id_col].isin(train_ids)].copy()
     train_flows = flows[flows[flow_id_col].isin(train_ids)].copy()
 
+    val_packets = packets[packets[flow_id_col].isin(val_ids)].copy()
+    val_flows = flows[flows[flow_id_col].isin(val_ids)].copy()
+
+    test_packets_sub = test_packets[test_packets[flow_id_col].isin(test_ids)].copy()
+    test_flows_sub = test_flows[test_flows[flow_id_col].isin(test_ids)].copy()
+
     preprocessor = Stage1Preprocessor(cfg)
     preprocessor.fit(train_packets, train_flows)
 
@@ -120,18 +129,45 @@ def build_dataloaders(
     save_dir = os.path.join(out_dir, "precomputed")
 
     # train
+    # train_npz = get_or_generate_stage1_tensors(
+    #     train_packets, train_flows, splits["train"], preprocessor, cfg, save_dir, "train"
+    # )
     train_npz = get_or_generate_stage1_tensors(
-        train_packets, train_flows, splits["train"], preprocessor, cfg, save_dir, "train"
+        packets=train_packets,
+        flows=train_flows,
+        flow_ids=splits["train"],
+        preprocessor=preprocessor,
+        cfg=cfg,
+        out_dir=save_dir,
+        prefix="train",
     )
 
     # val
+    # val_npz = get_or_generate_stage1_tensors(
+    #     train_packets, train_flows, splits["val"], preprocessor, cfg, save_dir, "val"
+    # )
     val_npz = get_or_generate_stage1_tensors(
-        train_packets, train_flows, splits["val"], preprocessor, cfg, save_dir, "val"
+        packets=val_packets,
+        flows=val_flows,
+        flow_ids=splits["val"],
+        preprocessor=preprocessor,
+        cfg=cfg,
+        out_dir=save_dir,
+        prefix="val",
     )
 
     # test
+    # test_npz = get_or_generate_stage1_tensors(
+    #     test_packets, test_flows, splits["test"], preprocessor, cfg, save_dir, "test"
+    # )
     test_npz = get_or_generate_stage1_tensors(
-        test_packets, test_flows, splits["test"], preprocessor, cfg, save_dir, "test"
+        packets=test_packets_sub,
+        flows=test_flows_sub,
+        flow_ids=splits["test"],
+        preprocessor=preprocessor,
+        cfg=cfg,
+        out_dir=save_dir,
+        prefix="test",
     )
 
     datasets = {
@@ -181,6 +217,8 @@ def build_dataloaders(
 
     save_json(metadata, os.path.join(out_dir, "stage1_metadata.json"))
     joblib.dump(preprocessor, os.path.join(out_dir, "stage1_preprocessor.joblib"))
+
+    print("[INFO] pipeline.py ------ build_dataloaders ----- end")
 
     return loaders, preprocessor, metadata
 

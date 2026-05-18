@@ -29,6 +29,8 @@ def train_model(
     out_dir: str,
     device: torch.device,
 ) -> Dict[str, Any]:
+    print("[INFO] trainer.py ------ train_model")
+
     train_cfg = cfg.get("training", {})
 
     epochs = int(train_cfg.get("epochs", 20))

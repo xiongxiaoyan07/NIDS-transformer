@@ -49,6 +49,9 @@ def read_stage1_csvs(
     Read and clean stage1_packets.csv and stage1_flows.csv.
     Apply per-flow packet truncation to save memory.
     """
+
+    print("[INFO] data_io.py ------ read_stage1_csvs --- start")
+
     packets = clean_dataframe(pd.read_csv(packet_csv))
     flows = clean_dataframe(pd.read_csv(flow_csv))
 
@@ -113,6 +116,8 @@ def read_stage1_csvs(
 
     packets = pd.concat(packets_list, axis=0)
 
+    print("[INFO] data_io.py ------ read_stage1_csvs --- end")
+
     return packets, flows
 
 
@@ -139,9 +144,12 @@ def generate_and_save_stage1_tensors(
 
     Save as .npz for reuse.
     """
+    print("[INFO] data_io.py ------ generate_and_save_stage1_tensors --- start")
+
     os.makedirs(out_dir, exist_ok=True)
     seq_cfg = cfg.get("sequence", {})
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
+    strategy = seq_cfg.get("strategy", "head")
     packet_iat_col = cfg["data"]["packet_iat_col"]
     flow_id_col = cfg["data"]["flow_id_col"]
     label_col = cfg["data"]["label_col"]
@@ -180,7 +188,7 @@ def generate_and_save_stage1_tensors(
         labels[idx] = int(flow_rows[fid][label_col])
         flow_id_tensor[idx] = fid
 
-    save_path = os.path.join(out_dir, f"{save_name_prefix}.npz")
+    save_path = os.path.join(out_dir, f"{strategy}{save_name_prefix}.npz")
     np.savez_compressed(save_path,
                         x=x_tensor,
                         time=time_tensor,
@@ -204,7 +212,9 @@ def get_or_generate_stage1_tensors(
     Otherwise, generate and save.
     """
     os.makedirs(out_dir, exist_ok=True)
-    npz_path = os.path.join(out_dir, f"{prefix}.npz")
+    seq_cfg = cfg.get("sequence", {})
+    strategy = seq_cfg.get("strategy", "head")
+    npz_path = os.path.join(out_dir, f"{strategy}{prefix}.npz")
     if os.path.exists(npz_path):
         print(f"[INFO] found existing precomputed tensor: {npz_path}")
         return npz_path
