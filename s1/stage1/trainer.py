@@ -40,6 +40,10 @@ def train_model(
     patience = int(train_cfg.get("early_stop_patience", 5))
     monitor = str(train_cfg.get("monitor_metric", "f1_label1"))
 
+    seq_cfg = cfg.get("sequence", {})
+    max_seq_len = int(seq_cfg.get("max_seq_len", 64))
+    strategy = seq_cfg.get("strategy", "head")
+
     train_labels = collect_train_labels(loaders["train"])
     alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
 
@@ -50,7 +54,7 @@ def train_model(
     best_epoch = 0
     epochs_without_improvement = 0
 
-    best_path = os.path.join(out_dir, "stage1_best_model.pt")
+    best_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_best_model.pt")
     history = []
 
     for epoch in range(1, epochs + 1):
@@ -95,13 +99,13 @@ def train_model(
                 print(f"[INFO] early stopping at epoch {epoch}")
                 break
 
-    save_json({"history": history}, os.path.join(out_dir, "stage1_history.json"))
+    save_json({"history": history}, os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_history.json"))
 
     ckpt = torch.load(best_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
 
     test_metrics = evaluate_model(model, loaders["test"], criterion, device)
-    save_json(test_metrics, os.path.join(out_dir, "stage1_test_metrics.json"))
+    save_json(test_metrics, os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_test_metrics.json"))
 
     print("[TEST]", test_metrics)
 

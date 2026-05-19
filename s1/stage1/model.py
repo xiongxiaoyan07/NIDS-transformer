@@ -227,7 +227,7 @@ class Stage1TimeAwareTransformer(nn.Module):
         if return_embedding:
             return logits, z, h
 
-        print("[INFO] model.py ------ forward")
+        # print("[INFO] model.py ------ forward")
 
         return logits
 

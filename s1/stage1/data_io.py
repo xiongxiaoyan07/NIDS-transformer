@@ -11,6 +11,7 @@ import pandas as pd
 import os
 import torch
 import joblib
+from scipy.signal import max_len_seq
 
 from .preprocessing import Stage1Preprocessor
 
@@ -188,7 +189,7 @@ def generate_and_save_stage1_tensors(
         labels[idx] = int(flow_rows[fid][label_col])
         flow_id_tensor[idx] = fid
 
-    save_path = os.path.join(out_dir, f"{strategy}{save_name_prefix}.npz")
+    save_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz")
     np.savez_compressed(save_path,
                         x=x_tensor,
                         time=time_tensor,
@@ -213,8 +214,9 @@ def get_or_generate_stage1_tensors(
     """
     os.makedirs(out_dir, exist_ok=True)
     seq_cfg = cfg.get("sequence", {})
+    max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
-    npz_path = os.path.join(out_dir, f"{strategy}{prefix}.npz")
+    npz_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{prefix}.npz")
     if os.path.exists(npz_path):
         print(f"[INFO] found existing precomputed tensor: {npz_path}")
         return npz_path

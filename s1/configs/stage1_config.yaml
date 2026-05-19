@@ -11,7 +11,7 @@ data:
   packet_iat_col: flow_iat_us
 
 sequence:
-  max_seq_len: 64
+  max_seq_len: 100
   # options: head, head_tail, random
   strategy: head
 
@@ -208,10 +208,10 @@ preprocessing:
 
 
 model:
-  d_model: 128
+  d_model: 256
   nhead: 4
   num_layers: 2
-  dim_feedforward: 256
+  dim_feedforward: 512
   dropout: 0.05
 
   # Ablation switches:
@@ -221,11 +221,11 @@ model:
   use_time_encoding: true
 
 training:
-  epochs: 20
+  epochs: 500
   batch_size: 128
   lr: 0.0001
   weight_decay: 0.0001
   num_workers: 0
   focal_gamma: 2.0
-  early_stop_patience: 5
+  early_stop_patience: 100
   monitor_metric: f1_label1

@@ -34,7 +34,7 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce)
         loss = ((1.0 - pt) ** self.gamma) * ce
 
-        print("[INFO] losses.py ------ forward")
+        # print("[INFO] losses.py ------ forward")
 
         return loss.mean()
 
