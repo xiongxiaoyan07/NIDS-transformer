@@ -16,11 +16,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import warnings
+
+from torch import nn
+
 warnings.filterwarnings('ignore')
 
-from .losses import FocalLoss, compute_class_alpha
+from .losses import FocalLoss, compute_class_alpha, FocalLossWithLabelSmoothing
 from .metrics import classification_metrics
 from .utils import save_json
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 
 
@@ -49,16 +53,45 @@ def train_model(
     gamma = float(train_cfg.get("focal_gamma", 2.0))
     patience = int(train_cfg.get("early_stop_patience", 5))
     monitor = str(train_cfg.get("monitor_metric", "f1_label1"))
+    label_smoothing = cfg["training"].get("label_smoothing", 0.1)
 
     seq_cfg = cfg.get("sequence", {})
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
 
+
+    # 计算类别权重
     train_labels = collect_train_labels(loaders["train"])
     alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
 
-    criterion = FocalLoss(alpha=alpha, gamma=gamma)
+    # criterion = FocalLoss(alpha=alpha, gamma=gamma)
+    # 使用FocalLossWithLabelSmoothing作为损失函数
+    criterion = FocalLossWithLabelSmoothing(
+        alpha=alpha,
+        gamma=gamma,
+        label_smoothing=label_smoothing
+    )
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    # 添加学习率调度器
+    warmup_epochs = min(10, epochs // 10)
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs
+    )
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=epochs - warmup_epochs,
+        eta_min=lr * 0.01
+    )
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs]
+    )
 
     best_score = -1e18
     best_epoch = 0
@@ -69,6 +102,7 @@ def train_model(
 
     for epoch in range(1, epochs + 1):
         train_loss = _train_one_epoch(model, loaders["train"], optimizer, criterion, device)
+        scheduler.step()  # 添加这行
         val_metrics = evaluate_model(model, loaders["val"], criterion, device)
 
         row = {
@@ -115,10 +149,28 @@ def train_model(
     ckpt = torch.load(best_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
 
+    # 在训练结束后，寻找最优阈值
+    print("\n在验证集上寻找最优决策阈值...")
+    best_threshold, threshold_results = find_optimal_threshold(
+        model, loaders["val"], device, class_idx=1
+    )
+
     # =====================================================================
     # 测试集评估 — 详细输出（与 MLP Baseline 格式一致）
     # =====================================================================
-    test_metrics = evaluate_model(model, loaders["test"], criterion, device)
+    # test_metrics = evaluate_model(model, loaders["test"], criterion, device)
+
+    # 使用最优阈值重新评估测试集
+    print(f"\n使用阈值 {best_threshold:.3f} 评估测试集...")
+    test_metrics = evaluate_model(
+        model, loaders["test"],
+        nn.CrossEntropyLoss(),  # 评估时不需要特殊的损失函数
+        device,
+        threshold=best_threshold
+    )
+    # 绘制阈值搜索结果
+    _plot_threshold_search(threshold_results, out_dir)
+
     save_json(test_metrics, os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_test_metrics.json"))
 
     # 获取类别名称（从数据集中提取）
@@ -172,6 +224,36 @@ def train_model(
     }
 
 
+def _plot_threshold_search(results, out_dir):
+    """绘制阈值搜索曲线"""
+    import matplotlib.pyplot as plt
+
+    thresholds = [r['threshold'] for r in results]
+    f1_scores = [r['f1'] for r in results]
+    precisions = [r['precision'] for r in results]
+    recalls = [r['recall'] for r in results]
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(thresholds, f1_scores, 'b-', label='F1 Score', linewidth=2)
+    plt.plot(thresholds, precisions, 'g--', label='Precision')
+    plt.plot(thresholds, recalls, 'r--', label='Recall')
+
+    plt.xlabel('Decision Threshold')
+    plt.ylabel('Score')
+    plt.title('Threshold Optimization for Attack Detection')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # 标记最优阈值
+    best_idx = f1_scores.index(max(f1_scores))
+    plt.axvline(x=thresholds[best_idx], color='k', linestyle=':', alpha=0.5)
+    plt.text(thresholds[best_idx], max(f1_scores),
+             f'Best: {thresholds[best_idx]:.2f}',
+             ha='center', va='bottom')
+
+    plt.savefig(f"{out_dir}/threshold_optimization.png", dpi=150, bbox_inches='tight')
+    plt.close()
+
 def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
     model.train()
 
@@ -200,15 +282,22 @@ def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
 
 
 @torch.no_grad()
-def evaluate_model(model, loader, criterion, device) -> Dict[str, Any]:
+def evaluate_model(
+        model: nn.Module,
+        loader,
+        criterion: nn.Module,
+        device: torch.device,
+        threshold: float = None,  # 新增参数
+) -> Dict[str, Any]:
+    """
+    评估模型，支持自定义决策阈值
+    """
     model.eval()
-
-    total_loss = 0.0
-    total_count = 0
-
     y_true = []
     y_pred = []
     y_score = []
+    total_loss = 0.0
+    num_batches = 0
 
     for batch in loader:
         x = batch["x"].to(device)
@@ -216,23 +305,122 @@ def evaluate_model(model, loader, criterion, device) -> Dict[str, Any]:
         mask = batch["mask"].to(device)
         y = batch["label"].to(device)
 
-        logits = model(x, t, mask)
-        loss = criterion(logits, y)
+        with torch.no_grad():
+            logits = model(x, t, mask)
+            loss = criterion(logits, y)
 
-        prob = torch.softmax(logits, dim=-1)
-        pred = torch.argmax(prob, dim=-1)
+            probs = torch.softmax(logits, dim=-1)
 
-        total_loss += float(loss.item()) * x.size(0)
-        total_count += x.size(0)
+            # 如果提供了阈值，使用自定义阈值
+            if threshold is not None:
+                preds = (probs[:, 1] >= threshold).long()
+            else:
+                preds = logits.argmax(dim=-1)
 
-        y_true.extend(y.detach().cpu().numpy().tolist())
-        y_pred.extend(pred.detach().cpu().numpy().tolist())
-        y_score.extend(prob[:, 1].detach().cpu().numpy().tolist())
+        y_true.extend(y.cpu().numpy().tolist())
+        y_pred.extend(preds.cpu().numpy().tolist())
+        y_score.extend(probs[:, 1].cpu().numpy().tolist())
+        total_loss += loss.item()
+        num_batches += 1
 
-    metrics = classification_metrics(y_true, y_pred, y_score)
-    metrics["loss"] = total_loss / max(total_count, 1)
+    avg_loss = total_loss / num_batches
+
+    # 计算详细指标
+    metrics = classification_metrics(
+        y_true=y_true,
+        y_pred=y_pred,
+        y_score=y_score,
+        num_classes=2,
+        loss=avg_loss,
+        threshold=threshold,
+    )
+
     return metrics
+# def evaluate_model(model, loader, criterion, device) -> Dict[str, Any]:
+#     model.eval()
+#
+#     total_loss = 0.0
+#     total_count = 0
+#
+#     y_true = []
+#     y_pred = []
+#     y_score = []
+#
+#     for batch in loader:
+#         x = batch["x"].to(device)
+#         t = batch["time"].to(device)
+#         mask = batch["mask"].to(device)
+#         y = batch["label"].to(device)
+#
+#         logits = model(x, t, mask)
+#         loss = criterion(logits, y)
+#
+#         prob = torch.softmax(logits, dim=-1)
+#         pred = torch.argmax(prob, dim=-1)
+#
+#         total_loss += float(loss.item()) * x.size(0)
+#         total_count += x.size(0)
+#
+#         y_true.extend(y.detach().cpu().numpy().tolist())
+#         y_pred.extend(pred.detach().cpu().numpy().tolist())
+#         y_score.extend(prob[:, 1].detach().cpu().numpy().tolist())
+#
+#     metrics = classification_metrics(y_true, y_pred, y_score)
+#     metrics["loss"] = total_loss / max(total_count, 1)
+#     return metrics
 
+
+def find_optimal_threshold(model, val_loader, device, class_idx=1):
+    """
+    在验证集上寻找最优决策阈值
+    """
+    model.eval()
+    y_true = []
+    y_scores = []
+
+    with torch.no_grad():
+        for batch in val_loader:
+            x = batch["x"].to(device)
+            t = batch["time"].to(device)
+            mask = batch["mask"].to(device)
+            y = batch["label"].to(device)
+
+            logits = model(x, t, mask)
+            probs = torch.softmax(logits, dim=-1)
+
+            y_true.extend(y.cpu().numpy().tolist())
+            y_scores.extend(probs[:, class_idx].cpu().numpy().tolist())
+
+    y_true = np.array(y_true)
+    y_scores = np.array(y_scores)
+
+    # 网格搜索最优阈值
+    thresholds = np.arange(0.1, 0.95, 0.05)
+    results = []
+
+    for threshold in thresholds:
+        y_pred = (y_scores >= threshold).astype(int)
+
+        precision = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_pred == 1) + 1e-8)
+        recall = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_true == 1) + 1e-8)
+        f1 = 2 * precision * recall / (precision + recall + 1e-8)
+
+        results.append({
+            'threshold': threshold,
+            'f1': f1,
+            'precision': precision,
+            'recall': recall,
+        })
+
+    # 选择F1最高的阈值
+    best_result = max(results, key=lambda x: x['f1'])
+
+    print(f"\n[THRESHOLD] 最优阈值: {best_result['threshold']:.2f}")
+    print(f"  F1: {best_result['f1']:.4f}")
+    print(f"  Precision: {best_result['precision']:.4f}")
+    print(f"  Recall: {best_result['recall']:.4f}")
+
+    return best_result['threshold'], results
 
 def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] = None) -> None:
     """

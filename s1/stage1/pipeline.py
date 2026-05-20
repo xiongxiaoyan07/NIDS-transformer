@@ -13,6 +13,7 @@ import os
 from typing import Dict, Any, Optional, Tuple
 
 import joblib
+import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
 
@@ -21,6 +22,7 @@ from .dataset import PrecomputedFlowDataset
 from .preprocessing import Stage1Preprocessor
 from .splits import stratified_train_val_test_split, train_val_split_for_external_test
 from .utils import safe_mkdir, save_json
+from torch.utils.data import WeightedRandomSampler
 
 
 def build_dataloaders(
@@ -179,11 +181,25 @@ def build_dataloaders(
     batch_size = int(train_cfg.get("batch_size", 64))
     num_workers = int(train_cfg.get("num_workers", 0))
 
+    # 在创建train loader前添加
+    train_dataset = datasets["train"]
+    train_labels = train_dataset.labels.numpy()
+
+    # 计算样本权重
+    class_counts = np.bincount(train_labels, minlength=2)
+    class_weights = 1.0 / class_counts
+    sample_weights = class_weights[train_labels]
+
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
     loaders = {
         "train": DataLoader(
             datasets["train"],
             batch_size=batch_size,
-            shuffle=True,
+            sampler=sampler,  # 使用sampler而不是shuffle
             num_workers=num_workers,
             pin_memory=True,
         ),

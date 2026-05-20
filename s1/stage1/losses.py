@@ -41,12 +41,82 @@ class FocalLoss(nn.Module):
 
 def compute_class_alpha(labels: List[int], num_classes: int = 2) -> torch.Tensor:
     """
-    Inverse-frequency class weights.
+    修正的类别权重计算 - 少数类获得更大权重
     """
     counts = np.bincount(np.array(labels, dtype=int), minlength=num_classes)
     counts = np.maximum(counts, 1)
 
-    inv = 1.0 / counts
-    alpha = inv / inv.sum() * num_classes
+    # 修改：少数类权重大，多数类权重小
+    total = counts.sum()
+    alpha = total / (num_classes * counts)  # 反比于频率
+
+    # 归一化
+    alpha = alpha / alpha.sum()
+
+    print(f"[INFO] Class distribution: {counts}")
+    print(f"[INFO] Computed alpha weights: {alpha}")
 
     return torch.tensor(alpha, dtype=torch.float32)
+
+
+class FocalLossWithLabelSmoothing(nn.Module):
+    """
+    结合Focal Loss和标签平滑的损失函数
+    增强数值稳定性
+    """
+
+    def __init__(self, alpha=None, gamma=2.0, label_smoothing=0.1, eps=1e-7):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+        self.eps = eps
+
+    def forward(self, inputs, targets):
+        """
+        Args:
+            inputs: (batch_size, num_classes) logits
+            targets: (batch_size,) class indices
+        """
+        num_classes = inputs.size(-1)
+
+        # 1. 计算log概率和概率（增加数值稳定性）
+        log_probs = F.log_softmax(inputs, dim=-1)
+        probs = torch.exp(log_probs)
+        # 裁剪概率避免log(0)
+        probs = torch.clamp(probs, min=self.eps, max=1.0 - self.eps)
+
+        # 2. 获取真实类别的概率
+        probs_gt = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+        # 3. 计算focal weight
+        focal_weight = (1 - probs_gt) ** self.gamma
+
+        # 4. 应用类别权重alpha
+        if self.alpha is not None:
+            if self.alpha.device != inputs.device:
+                self.alpha = self.alpha.to(inputs.device)
+            alpha_weight = self.alpha[targets]
+            focal_weight = focal_weight * alpha_weight
+
+        # 5. 计算标签平滑的交叉熵
+        # 使用PyTorch的内置函数，更稳定
+        ce_loss = F.cross_entropy(
+            inputs,
+            targets,
+            reduction='none',
+            label_smoothing=self.label_smoothing
+        )
+
+        # 6. 应用focal weight并求平均
+        loss = (focal_weight * ce_loss).mean()
+
+        # 7. 检查是否有NaN
+        if torch.isnan(loss):
+            print(f"[WARNING] NaN detected in loss!")
+            print(f"  probs_gt range: [{probs_gt.min():.4f}, {probs_gt.max():.4f}]")
+            print(f"  focal_weight range: [{focal_weight.min():.4f}, {focal_weight.max():.4f}]")
+            print(f"  ce_loss range: [{ce_loss.min():.4f}, {ce_loss.max():.4f}]")
+            return torch.tensor(0.0, device=inputs.device, requires_grad=True)
+
+        return loss

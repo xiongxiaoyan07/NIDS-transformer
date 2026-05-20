@@ -201,22 +201,26 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
 
-        # self.classifier = nn.Sequential(
-        #     nn.LayerNorm(d_model),
-        #     nn.Linear(d_model, d_model),
-        #     nn.GELU(),
-        #     nn.Dropout(dropout),
-        #     nn.Linear(d_model, 2),
-        # )
-        num_classes = 2
-
-        self.classifier = build_mlp(
-            input_dim=d_model,
-            output_dim=num_classes,
-            mlp_cfg=classifier_cfg,
-            default_dropout=dropout,
-            legacy_layer_factory=lambda: nn.Linear(d_model, num_classes),
+        # 替换原来的简单分类器
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model // 2, d_model // 4),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model // 4, 2),
         )
+        # num_classes = 2
+        #
+        # self.classifier = build_mlp(
+        #     input_dim=d_model,
+        #     output_dim=num_classes,
+        #     mlp_cfg=classifier_cfg,
+        #     default_dropout=dropout,
+        #     legacy_layer_factory=lambda: nn.Linear(d_model, num_classes),
+        # )
 
     def forward(
         self,

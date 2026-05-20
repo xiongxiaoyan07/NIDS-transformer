@@ -55,6 +55,11 @@ def parse_args():
 
     return parser.parse_args()
 
+def count_parameters(model):
+    """计算模型参数量"""
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
 
 def main():
     args = parse_args()
@@ -82,6 +87,28 @@ def main():
 
     input_dim = preprocessor.input_dim()
     model = Stage1TimeAwareTransformer(input_dim=input_dim, cfg=cfg).to(device)
+
+    # 打印参数量
+    total_params, trainable_params = count_parameters(model)
+    print(f"\n{'=' * 60}")
+    print(f"📊 Model Statistics:")
+    print(f"{'=' * 60}")
+    print(f"  Total parameters:      {total_params:,}")
+    print(f"  Trainable parameters:  {trainable_params:,}")
+    print(f"  Non-trainable params:  {total_params - trainable_params:,}")
+
+    # 打印各组件参数量
+    print(f"\n  Parameter breakdown:")
+    print(f"  {'─' * 40}")
+    for name, param in model.named_parameters():
+        print(f"    {name:<40} {param.numel():>10,}")
+
+    # 如果有GPU，也打印模型大小
+    param_size = sum(p.numel() * p.element_size() for p in model.parameters())
+    buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
+    size_all_mb = (param_size + buffer_size) / 1024 ** 2
+    print(f"\n  Model size: {size_all_mb:.2f} MB")
+    print(f"{'=' * 60}\n")
 
     run_summary = train_model(
         model=model,
