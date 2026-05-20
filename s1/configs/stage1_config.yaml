@@ -206,38 +206,27 @@ preprocessing:
         - idle_max
         - idle_min
 
-
 model:
   d_model: 128
   nhead: 8
-  num_layers: 2
-  dim_feedforward: 256
-  dropout: 0.3 # 增加dropout防止过拟合
+  num_layers: 3          # 增加层数：2 → 3
+  dim_feedforward: 512   # 增加FFN维度：256 → 512
+  dropout: 0.2           # 降低dropout：0.3 → 0.2
 
-  # Ablation switches:
-  # no time-aware: use_time_encoding=false
-  # no position:   use_positional_encoding=false
   use_positional_encoding: true
   use_time_encoding: true
 
-#  classifier:
-#    hidden_dims: [ 64 ]
-#    activation: gelu
-#    dropout: 0.05
-#    norm: layernorm
-
 training:
-  epochs: 1000
-  batch_size: 32
-  lr: 0.0001
-  weight_decay: 0.0005
+  epochs: 500            # 降低最大epoch：1000 → 500
+  batch_size: 64         # 增加batch size：32 → 64
+  lr: 0.0005             # 提高学习率：0.0001 → 0.0005
+  weight_decay: 0.0001   # 降低正则化：0.0005 → 0.0001
   num_workers: 0
-  focal_gamma: 2.0
-  early_stop_patience: 50
+  focal_gamma: 1.5       # 降低focal gamma：2.0 → 1.5（因为数据相对平衡）
+  early_stop_patience: 30
   monitor_metric: f1_label1
   monitor_mode: max
 
-  # 新增配置
-  label_smoothing: 0.1  # 标签平滑系数
-  threshold_search: true  # 是否搜索最优阈值
+  label_smoothing: 0.05  # 降低标签平滑：0.1 → 0.05
+  threshold_search: true
 #  monitor_metric: f1_label1 / weighted_f1 / macro_f1

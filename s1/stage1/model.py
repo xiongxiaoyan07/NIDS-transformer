@@ -126,6 +126,36 @@ class TimeAwareEncoding(nn.Module):
         return self.dropout(out)
 
 
+class AttentionPooling(nn.Module):
+    """
+    学习性的注意力池化，替代简单的 masked_mean_pool
+    """
+
+    def __init__(self, d_model):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.Tanh(),
+            nn.Linear(d_model // 2, 1)
+        )
+
+    def forward(self, h, mask):
+        # h: [B, L, D], mask: [B, L]
+        attn_weights = self.attention(h).squeeze(-1)  # [B, L]
+
+        # 对padding位置设置极小权重
+        attn_weights = attn_weights.masked_fill(~mask.bool(), -1e9)
+        attn_weights = torch.softmax(attn_weights, dim=-1).unsqueeze(-1)  # [B, L, 1]
+
+        # 加权求和
+        z = (h * attn_weights).sum(dim=1)  # [B, D]
+        return z
+
+# 在 model.py 的 forward 方法中：
+# 替换 z = self.masked_mean_pool(h, mask)
+# 为：
+# z = self.attention_pool(h, mask)
+
 class Stage1TimeAwareTransformer(nn.Module):
     """
     Stage1 intra-flow packet-sequence Transformer.
@@ -201,15 +231,25 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
 
-        # 替换原来的简单分类器
+        # 使用注意力池化替代简单的平均池化
+        self.attention_pool = AttentionPooling(d_model)
+
+        # 在 Stage1TimeAwareTransformer.__init__ 中替换分类器
+        # 使用更深更强的分类头
         self.classifier = nn.Sequential(
             nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, d_model // 4),
+            nn.Linear(d_model, d_model),
             nn.GELU(),
             nn.Dropout(dropout * 0.5),
+
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.3),
+
+            nn.Linear(d_model // 2, d_model // 4),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.2),
+
             nn.Linear(d_model // 4, 2),
         )
         # num_classes = 2
@@ -242,7 +282,9 @@ class Stage1TimeAwareTransformer(nn.Module):
         src_key_padding_mask = ~mask.bool()
 
         h = self.encoder(e, src_key_padding_mask=src_key_padding_mask)
-        z = self.masked_mean_pool(h, mask)
+        # z = self.masked_mean_pool(h, mask)
+        # 使用注意力池化
+        z = self.attention_pool(h, mask)
 
         logits = self.classifier(z)
 
