@@ -42,6 +42,7 @@ def train_model(
     cfg: Dict[str, Any],
     out_dir: str,
     device: torch.device,
+    train_labels
 ) -> Dict[str, Any]:
     print("[INFO] trainer.py ------ train_model")
 
@@ -61,7 +62,26 @@ def train_model(
 
 
     # 计算类别权重
-    train_labels = collect_train_labels(loaders["train"])
+    # 验证标签分布
+    unique, counts = np.unique(train_labels, return_counts=True)
+    print(f"[INFO] train_model收到的标签分布: {dict(zip(unique, counts))}")
+    imbalance_ratio = counts[0] / counts[1] if counts[1] > 0 else 1.0
+    print(f"[INFO] 不平衡比率 (多数:少数): {imbalance_ratio:.1f}:1")
+
+    # 根据不平衡程度自动调整gamma
+    if imbalance_ratio > 10:
+        recommended_gamma = 2.0
+    elif imbalance_ratio > 5:
+        recommended_gamma = 1.5
+    else:
+        recommended_gamma = 1.0
+
+    print(f"[INFO] 自动推荐focal_gamma: {recommended_gamma} (配置值为: {gamma})")
+    # 如果配置的gamma与推荐值差距太大，使用推荐值
+    if abs(gamma - recommended_gamma) > 0.5:
+        print(f"[WARNING] 配置的gamma({gamma})与推荐值({recommended_gamma})差距较大，使用推荐值")
+        gamma = recommended_gamma
+    # train_labels = collect_train_labels(loaders["train"]) train 在 pipeline中已经进行了WeightedRandomSampler，所以比例已经基本平均了
     alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
 
     # criterion = FocalLoss(alpha=alpha, gamma=gamma)

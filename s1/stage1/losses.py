@@ -41,22 +41,64 @@ class FocalLoss(nn.Module):
 
 def compute_class_alpha(labels: List[int], num_classes: int = 2) -> torch.Tensor:
     """
-    修正的类别权重计算 - 少数类获得更大权重
+    计算类别权重 - 少数类获得更大权重
+
+    对于极度不平衡数据，使用更激进的权重策略
     """
     counts = np.bincount(np.array(labels, dtype=int), minlength=num_classes)
     counts = np.maximum(counts, 1)
 
-    # 修改：少数类权重大，多数类权重小
-    total = counts.sum()
-    alpha = total / (num_classes * counts)  # 反比于频率
+    # 计算不平衡比率
+    majority_count = counts.max()
+    minority_count = counts.min()
+    ratio = majority_count / minority_count
+
+    print(f"[INFO] Class distribution: {counts}")
+    print(f"[INFO] Imbalance ratio: {ratio:.1f}:1")
+
+    # 根据不平衡程度选择权重策略
+    if ratio > 20:
+        # 极度不平衡：使用更激进的权重
+        alpha = np.array([1.0 / counts[0], 1.0 / counts[1]])
+        alpha = alpha / alpha.sum()
+        print(f"[INFO] 极度不平衡，使用反比权重")
+    elif ratio > 5:
+        # 中度不平衡
+        total = counts.sum()
+        alpha = total / (num_classes * counts)
+        print(f"[INFO] 中度不平衡，使用标准平衡权重")
+    else:
+        # 接近平衡
+        total = counts.sum()
+        alpha = total / (num_classes * counts)
+        print(f"[INFO] 接近平衡，使用轻微加权权重")
 
     # 归一化
     alpha = alpha / alpha.sum()
 
-    print(f"[INFO] Class distribution: {counts}")
     print(f"[INFO] Computed alpha weights: {alpha}")
+    print(f"[INFO] Few class weight / Many class weight: {alpha[1] / alpha[0]:.2f}")
 
     return torch.tensor(alpha, dtype=torch.float32)
+
+# def compute_class_alpha(labels: List[int], num_classes: int = 2) -> torch.Tensor:
+#     """
+#     修正的类别权重计算 - 少数类获得更大权重
+#     """
+#     counts = np.bincount(np.array(labels, dtype=int), minlength=num_classes)
+#     counts = np.maximum(counts, 1)
+#
+#     # 修改：少数类权重大，多数类权重小
+#     total = counts.sum()
+#     alpha = total / (num_classes * counts)  # 反比于频率
+#
+#     # 归一化
+#     alpha = alpha / alpha.sum()
+#
+#     print(f"[INFO] Class distribution: {counts}")
+#     print(f"[INFO] Computed alpha weights: {alpha}")
+#
+#     return torch.tensor(alpha, dtype=torch.float32)
 
 
 class FocalLossWithLabelSmoothing(nn.Module):

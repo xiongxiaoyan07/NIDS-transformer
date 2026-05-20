@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import os
 
+import numpy as np
 import torch
 
 from stage1.config import load_config
@@ -81,9 +82,23 @@ def main():
         external_packet_csv=args.external_packet_csv,
         external_flow_csv=args.external_flow_csv,
     )
+    # ===== 关键修改 =====
+    # 直接从原始数据获取真实的训练标签分布
+    # 从 metadata 中获取真实的类别计数
+    label_counts = metadata["label_counts_train"]
+    print(f"[INFO] 真实训练集类别分布: {label_counts}")
+
+    # 重建真实的标签列表（用于计算类别权重）
+    train_dataset = loaders["train"].dataset
+    train_labels = train_dataset.labels.numpy().tolist()
+
+    # 验证分布
+    unique, counts = np.unique(train_labels, return_counts=True)
+    print(f"[INFO] 训练集实际类别分布: {dict(zip(unique, counts))}")
 
     print("[INFO] preprocessor summary:")
     print(metadata["preprocessor"])
+    print("label_counts_train", metadata["label_counts_train"])
 
     input_dim = preprocessor.input_dim()
     model = Stage1TimeAwareTransformer(input_dim=input_dim, cfg=cfg).to(device)
@@ -116,6 +131,7 @@ def main():
         cfg=cfg,
         out_dir=args.out_dir,
         device=device,
+        train_labels=metadata["train_labels"]
     )
 
     save_json(run_summary, os.path.join(args.out_dir, "stage1_run_summary.json"))

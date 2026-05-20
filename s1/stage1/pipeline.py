@@ -189,6 +189,8 @@ def build_dataloaders(
     class_counts = np.bincount(train_labels, minlength=2)
     class_weights = 1.0 / class_counts
     sample_weights = class_weights[train_labels]
+    print("计算样本权重: class_counts", class_counts)
+    print("计算样本权重: sample_weights", sample_weights)
 
     sampler = WeightedRandomSampler(
         weights=sample_weights,
@@ -229,6 +231,7 @@ def build_dataloaders(
         "label_counts_test": _label_counts(test_flows, flow_id_col, label_col, test_ids),
         "splits": splits,
         "preprocessor": preprocessor.summary(),
+        "train_labels": train_labels.tolist() if isinstance(train_labels, np.ndarray) else train_labels,
     }
 
     save_json(metadata, os.path.join(out_dir, "stage1_metadata.json"))

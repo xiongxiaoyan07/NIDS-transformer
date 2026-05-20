@@ -207,26 +207,23 @@ preprocessing:
         - idle_min
 
 model:
-  d_model: 128
+  d_model: 128          # 回退到128（数据量不足以支撑256）
   nhead: 8
-  num_layers: 3          # 增加层数：2 → 3
-  dim_feedforward: 512   # 增加FFN维度：256 → 512
-  dropout: 0.2           # 降低dropout：0.3 → 0.2
-
+  num_layers: 2         # 回退到2层（减少过拟合）
+  dim_feedforward: 512  # 回退到512
+  dropout: 0.3          # 增加dropout防止过拟合
   use_positional_encoding: true
   use_time_encoding: true
 
 training:
-  epochs: 500            # 降低最大epoch：1000 → 500
-  batch_size: 64         # 增加batch size：32 → 64
-  lr: 0.0005             # 提高学习率：0.0001 → 0.0005
-  weight_decay: 0.0001   # 降低正则化：0.0005 → 0.0001
+  epochs: 1000
+  batch_size: 64
+  lr: 0.0003            # 降低学习率（更稳定的训练）
+  weight_decay: 0.0005  # 增加权重衰减（防止过拟合）
   num_workers: 0
-  focal_gamma: 1.5       # 降低focal gamma：2.0 → 1.5（因为数据相对平衡）
-  early_stop_patience: 30
+  focal_gamma: 2.0      # 恢复到2.0（极度不平衡数据需要）
+  early_stop_patience: 40  # 增加patience（给模型更多时间）
   monitor_metric: f1_label1
   monitor_mode: max
-
-  label_smoothing: 0.05  # 降低标签平滑：0.1 → 0.05
+  label_smoothing: 0.05  # 适度标签平滑
   threshold_search: true
-#  monitor_metric: f1_label1 / weighted_f1 / macro_f1

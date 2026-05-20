@@ -234,24 +234,28 @@ class Stage1TimeAwareTransformer(nn.Module):
         # 使用注意力池化替代简单的平均池化
         self.attention_pool = AttentionPooling(d_model)
 
-        # 在 Stage1TimeAwareTransformer.__init__ 中替换分类器
-        # 使用更深更强的分类头
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.5),
-
-            nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.3),
-
-            nn.Linear(d_model // 2, d_model // 4),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.2),
-
-            nn.Linear(d_model // 4, 2),
-        )
+        # 在 Stage1TimeAwareTransformer.__init__ 中
+        # 对于极度不平衡数据，使用更简单的分类器
+        if dropout > 0.25:  # 高dropout时使用简化分类器
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(d_model, 2),
+            )
+        else:
+            self.classifier = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.Dropout(dropout * 0.5),
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.Dropout(dropout * 0.3),
+                nn.Linear(d_model // 2, 2),
+            )
         # num_classes = 2
         #
         # self.classifier = build_mlp(

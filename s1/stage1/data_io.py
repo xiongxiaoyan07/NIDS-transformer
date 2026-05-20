@@ -156,6 +156,7 @@ def generate_and_save_stage1_tensors(
     label_col = cfg["data"]["label_col"]
 
     feature_dim = preprocessor.input_dim()
+    print("输入维度：", feature_dim)
     num_flows = len(flow_ids)
 
     x_tensor = np.zeros((num_flows, max_seq_len, feature_dim), dtype=np.float32)
