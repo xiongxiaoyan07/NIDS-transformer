@@ -16,8 +16,6 @@ from typing import Dict, Any
 import torch
 import torch.nn as nn
 
-from .build_mlp import build_mlp
-
 
 class RecordLevelProjection(nn.Module):
     """
@@ -27,16 +25,13 @@ class RecordLevelProjection(nn.Module):
     This is the record-level projection before Transformer.
     """
 
-    def __init__(self, input_dim: int, d_model: int, dropout: float, mlp_cfg: dict | None = None):
+    def __init__(self, input_dim: int, d_model: int, dropout: float):
         super().__init__()
-        # 如果你旧版 projection 不是纯 Linear，而是 Linear + Dropout / LayerNorm，
-        # 可以把 legacy_layer_factory 改成旧版原始结构。
-        self.proj = build_mlp(
-            input_dim=input_dim,
-            output_dim=d_model,
-            mlp_cfg=mlp_cfg,
-            default_dropout=dropout,
-            legacy_layer_factory=lambda: nn.Linear(input_dim, d_model),
+        self.proj = nn.Sequential(
+            nn.LayerNorm(input_dim),
+            nn.Linear(input_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -171,14 +166,10 @@ class Stage1TimeAwareTransformer(nn.Module):
         use_positional_encoding = bool(model_cfg.get("use_positional_encoding", True))
         use_time_encoding = bool(model_cfg.get("use_time_encoding", True))
 
-        record_projection_cfg = model_cfg.get("record_projection", None)
-        classifier_cfg = model_cfg.get("classifier", None)
-
         self.projection = RecordLevelProjection(
             input_dim=input_dim,
             d_model=d_model,
             dropout=dropout,
-            mlp_cfg=record_projection_cfg
         )
 
         self.time_encoding = TimeAwareEncoding(
@@ -201,21 +192,12 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
 
-        # self.classifier = nn.Sequential(
-        #     nn.LayerNorm(d_model),
-        #     nn.Linear(d_model, d_model),
-        #     nn.GELU(),
-        #     nn.Dropout(dropout),
-        #     nn.Linear(d_model, 2),
-        # )
-        num_classes = 2
-
-        self.classifier = build_mlp(
-            input_dim=d_model,
-            output_dim=num_classes,
-            mlp_cfg=classifier_cfg,
-            default_dropout=dropout,
-            legacy_layer_factory=lambda: nn.Linear(d_model, num_classes),
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 2),
         )
 
     def forward(

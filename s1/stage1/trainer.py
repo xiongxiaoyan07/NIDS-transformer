@@ -8,10 +8,20 @@ import os
 from typing import Dict, Any, List
 
 import torch
+# ============================================================================
+# 在 trainer.py 文件末尾添加以下新函数
+# ============================================================================
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import warnings
+warnings.filterwarnings('ignore')
 
 from .losses import FocalLoss, compute_class_alpha
 from .metrics import classification_metrics
 from .utils import save_json
+
 
 
 def collect_train_labels(loader) -> List[int]:
@@ -74,9 +84,10 @@ def train_model(
             f"[Epoch {epoch:03d}] "
             f"train_loss={train_loss:.6f} "
             f"val_loss={val_metrics['loss']:.6f} "
-            f"val_f1_label1={val_metrics['f1_label1']:.4f} "
-            f"val_recall_label1={val_metrics['recall_label1']:.4f} "
-            f"val_macro_f1={val_metrics['macro_f1']:.4f}"
+            f"val_accuracy={val_metrics['accuracy']:.4f} "
+            f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+            f"val_weighted_f1={val_metrics['weighted_f1']:.4f}"
+            f"val_auc={val_metrics['auc']:.4f}"
         )
 
         if score > best_score:
@@ -104,10 +115,54 @@ def train_model(
     ckpt = torch.load(best_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
 
+    # =====================================================================
+    # 测试集评估 — 详细输出（与 MLP Baseline 格式一致）
+    # =====================================================================
     test_metrics = evaluate_model(model, loaders["test"], criterion, device)
     save_json(test_metrics, os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_test_metrics.json"))
 
-    print("[TEST]", test_metrics)
+    # 获取类别名称（从数据集中提取）
+    try:
+        unique_labels = set()
+        for batch in loaders["test"]:
+            unique_labels.update(batch["label"].numpy().tolist())
+        class_names = [f"Class_{i}" for i in sorted(unique_labels)]
+    except:
+        class_names = ["Class_0", "Class_1"]
+
+    # 打印详细指标
+    print_detailed_metrics(test_metrics, class_names)
+
+    # =====================================================================
+    # 可视化
+    # =====================================================================
+    # 训练曲线
+    plot_training_curves(
+        history=history,
+        out_dir=out_dir,
+        best_epoch=best_epoch,
+        prefix=f"seqLen{max_seq_len}{strategy}stage1"
+    )
+
+    # 混淆矩阵
+    if "confusion_matrix" in test_metrics:
+        plot_confusion_matrix(
+            cm=test_metrics["confusion_matrix"],
+            class_names=class_names,
+            out_dir=out_dir,
+            prefix=f"seqLen{max_seq_len}{strategy}stage1"
+        )
+
+    # 各类别 F1
+    if "per_class_f1" in test_metrics:
+        plot_per_class_f1(
+            per_class_f1=test_metrics["per_class_f1"],
+            class_names=class_names,
+            out_dir=out_dir,
+            prefix=f"seqLen{max_seq_len}{strategy}stage1"
+        )
+
+    print("\n[TEST] Full metrics:", test_metrics)
 
     return {
         "best_model_path": best_path,
@@ -177,3 +232,127 @@ def evaluate_model(model, loader, criterion, device) -> Dict[str, Any]:
     metrics = classification_metrics(y_true, y_pred, y_score)
     metrics["loss"] = total_loss / max(total_count, 1)
     return metrics
+
+
+def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] = None) -> None:
+    """
+    打印详细测试指标，格式与 MLP Baseline 一致。
+    """
+    print("\n" + "=" * 50)
+    print(f"{'Stage1 Transformer - 测试集结果':^50}")
+    print("=" * 50)
+    print(f"  Loss:              {test_metrics.get('loss', 0):.4f}")
+    print(f"  F1 (Macro):        {test_metrics.get('macro_f1', 0):.4f}")
+    print(f"  F1 (Weighted):     {test_metrics.get('weighted_f1', 0):.4f}")
+    print(f"  AUC (OvR Macro):   {test_metrics.get('auc', 0):.4f}")
+    print(f"{'=' * 50}")
+
+    # 各类别 F1
+    if "per_class_f1" in test_metrics:
+        per_class = test_metrics["per_class_f1"]
+        f1_sorted = sorted(per_class.items(), key=lambda x: x[1], reverse=True)
+        print("\n[RESULT] 各类别 F1 (降序):")
+        for cls, f1 in f1_sorted:
+            label_name = class_names[int(cls)] if class_names else cls
+            print(f"  {label_name:<30s}: {f1:.4f}")
+
+
+def plot_training_curves(history: List[Dict], out_dir: str, best_epoch: int,
+                         prefix: str = "stage1") -> None:
+    """
+    绘制训练曲线：Loss 和 F1。
+    """
+    epochs = [h["epoch"] for h in history]
+    train_loss = [h["train_loss"] for h in history]
+    val_loss = [h.get("val_loss", 0) for h in history]
+    val_f1 = [h.get("val_macro_f1", 0) for h in history]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # 子图1: Loss 曲线
+    ax1 = axes[0]
+    ax1.plot(epochs, train_loss, 'b-', label='Train Loss', linewidth=2)
+    ax1.plot(epochs, val_loss, 'r-', label='Val Loss', linewidth=2)
+    if best_epoch > 0:
+        ax1.axvline(x=best_epoch, color='green', linestyle='--', alpha=0.7,
+                    label=f'Best Epoch ({best_epoch})')
+    ax1.set_xlabel('Epoch', fontsize=12)
+    ax1.set_ylabel('Loss', fontsize=12)
+    ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # 子图2: F1 曲线
+    ax2 = axes[1]
+    ax2.plot(epochs, val_f1, 'g-', label='Val F1 (Macro)', linewidth=2)
+    if best_epoch > 0:
+        ax2.axvline(x=best_epoch, color='green', linestyle='--', alpha=0.7,
+                    label=f'Best Epoch ({best_epoch})')
+    ax2.set_xlabel('Epoch', fontsize=12)
+    ax2.set_ylabel('F1 Score (Macro)', fontsize=12)
+    ax2.set_title('Validation F1 Score', fontsize=14, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, f"{prefix}_training_curves.png")
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.show()
+    print(f"[INFO] 训练曲线已保存: {save_path}")
+
+
+def plot_confusion_matrix(cm: np.ndarray, class_names: List[str], out_dir: str,
+                          prefix: str = "stage1") -> None:
+    """
+    绘制归一化混淆矩阵。
+    """
+    cm = np.array(cm)
+    cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    sns.heatmap(cm_normalized, annot=True, fmt='.2f', cmap='Blues',
+                xticklabels=class_names, yticklabels=class_names, ax=ax)
+
+    ax.set_xlabel('Predicted', fontsize=12)
+    ax.set_ylabel('True', fontsize=12)
+    ax.set_title('Normalized Confusion Matrix', fontsize=14, fontweight='bold')
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, f"{prefix}_confusion_matrix.png")
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.show()
+    print(f"[INFO] 混淆矩阵已保存: {save_path}")
+
+
+def plot_per_class_f1(per_class_f1: Dict[str, float], class_names: List[str],
+                      out_dir: str, prefix: str = "stage1") -> None:
+    """
+    绘制各类别 F1 分数条形图。
+    """
+    # 按 F1 排序
+    items = sorted(per_class_f1.items(), key=lambda x: x[1])
+    names = [class_names[int(k)] if class_names else k for k, _ in items]
+    values = [v for _, v in items]
+
+    fig, ax = plt.subplots(figsize=(10, max(6, len(names) * 0.4)))
+
+    colors = plt.cm.RdYlGn(np.linspace(0.2, 0.9, len(values)))
+    bars = ax.barh(range(len(values)), values, color=colors, edgecolor='gray', linewidth=0.5)
+
+    ax.set_yticks(range(len(values)))
+    ax.set_yticklabels(names, fontsize=9)
+    ax.set_xlabel('F1 Score', fontsize=12)
+    ax.set_title('Per-Class F1 Score (Sorted)', fontsize=14, fontweight='bold')
+    ax.set_xlim(0, 1.05)
+    ax.axvline(x=0.5, color='red', linestyle='--', alpha=0.5, label='F1=0.5')
+
+    for bar, val in zip(bars, values):
+        ax.text(min(val + 0.02, 1.02), bar.get_y() + bar.get_height() / 2,
+                f'{val:.3f}', va='center', fontsize=8)
+
+    plt.tight_layout()
+    save_path = os.path.join(out_dir, f"{prefix}_per_class_f1.png")
+    plt.savefig(save_path, dpi=200, bbox_inches='tight')
+    plt.show()
+    print(f"[INFO] 各类别 F1 图已保存: {save_path}")
