@@ -11,7 +11,7 @@ Stage1 model:
 from __future__ import annotations
 
 import math
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
@@ -155,15 +155,116 @@ class AttentionPooling(nn.Module):
 # 替换 z = self.masked_mean_pool(h, mask)
 # 为：
 # z = self.attention_pool(h, mask)
+class FlowFeatureEncoder(nn.Module):
+    """
+    Encodes flow-level statistical features into d_model space.
+    Used only when inject_to_packets=False.
+    """
+
+    def __init__(self, flow_dim: int, d_model: int, dropout: float):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(flow_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model),
+        )
+
+    def forward(self, flow_feats: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            flow_feats: [B, flow_dim]
+        Returns:
+            flow_encoded: [B, d_model]
+        """
+        return self.encoder(flow_feats)
+
+class FlowFusion(nn.Module):
+    """
+    Fuses packet-level representation (from Transformer) with flow-level features.
+    Supports three fusion methods: concat, gated, add.
+    """
+
+    def __init__(self, d_model: int, fusion_method: str, dropout: float):
+        super().__init__()
+        self.fusion_method = fusion_method
+
+        if fusion_method == "concat":
+            self.fusion_layer = nn.Sequential(
+                nn.Linear(d_model * 2, d_model),
+                nn.LayerNorm(d_model),
+                nn.GELU(),
+                nn.Dropout(dropout),
+            )
+        elif fusion_method == "gated":
+            self.gate = nn.Sequential(
+                nn.Linear(d_model * 2, d_model),
+                nn.Sigmoid()
+            )
+            # Optional: add a small projection after gating
+            self.post_gate = nn.Sequential(
+                nn.LayerNorm(d_model),
+                nn.Dropout(dropout),
+            )
+        elif fusion_method == "add":
+            # Optional projection for pooled representation
+            self.pooled_proj = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.LayerNorm(d_model),
+                nn.Dropout(dropout),
+            )
+            # Optional projection for flow representation
+            self.flow_proj = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.LayerNorm(d_model),
+                nn.Dropout(dropout),
+            )
+        else:
+            raise ValueError(f"Unsupported fusion method: {fusion_method}")
+
+    def forward(self, pooled: torch.Tensor, flow_encoded: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pooled: [B, d_model] - representation from Transformer + pooling
+            flow_encoded: [B, d_model] - encoded flow-level features
+        Returns:
+            fused: [B, d_model]
+        """
+        if self.fusion_method == "concat":
+            # Concatenate and project
+            concat_feat = torch.cat([pooled, flow_encoded], dim=-1)  # [B, 2*d_model]
+            return self.fusion_layer(concat_feat)  # [B, d_model]
+
+        elif self.fusion_method == "gated":
+            # Compute dynamic gates
+            concat_feat = torch.cat([pooled, flow_encoded], dim=-1)  # [B, 2*d_model]
+            gate = self.gate(concat_feat)  # [B, d_model], values in [0, 1]
+
+            # Gated fusion
+            fused = gate * pooled + (1 - gate) * flow_encoded  # [B, d_model]
+            return self.post_gate(fused)
+
+        elif self.fusion_method == "add":
+            # Additive fusion with optional projections
+            pooled_proj = self.pooled_proj(pooled)  # [B, d_model]
+            flow_proj = self.flow_proj(flow_encoded)  # [B, d_model]
+            return pooled_proj + flow_proj  # [B, d_model]
 
 class Stage1TimeAwareTransformer(nn.Module):
     """
     Stage1 intra-flow packet-sequence Transformer.
 
+    Supports three modes:
+    1. inject_to_packets=True: Flow features concatenated to each packet (方案A)
+    2. inject_to_packets=False, use_flow_features=True: Hierarchical fusion (方案C)
+    3. use_flow_features=False: Only packet features (方案B)
+
     Input:
         x:
             [B, L, input_dim]
-            x_i,t = [packet header features ; flow-level features ; temporal features]
+            Mode 1: [packet features ; flow features]
+            Mode 2/3: [packet features only]
 
         time_log:
             [B, L]
@@ -173,6 +274,10 @@ class Stage1TimeAwareTransformer(nn.Module):
             [B, L]
             True  = real packet
             False = padding
+
+        flow_feats (optional):
+            [B, flow_dim]
+            Only used in Mode 2 （方案C）
 
     Output:
         logits:
@@ -190,7 +295,13 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         model_cfg = cfg.get("model", {})
         seq_cfg = cfg.get("sequence", {})
+        # 获取flow_fusion配置
+        flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
+        self.use_flow_fusion = flow_fusion_cfg.get("enabled", False)
+        self.inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
+        self.fusion_method = flow_fusion_cfg.get("method", "gated")
 
+        # Model hyperparameters
         d_model = int(model_cfg.get("d_model", 128))
         nhead = int(model_cfg.get("nhead", 4))
         num_layers = int(model_cfg.get("num_layers", 2))
@@ -202,8 +313,8 @@ class Stage1TimeAwareTransformer(nn.Module):
         use_time_encoding = bool(model_cfg.get("use_time_encoding", True))
 
         record_projection_cfg = model_cfg.get("record_projection", None)
-        classifier_cfg = model_cfg.get("classifier", None)
 
+        # Record-level projection (always needed)
         self.projection = RecordLevelProjection(
             input_dim=input_dim,
             d_model=d_model,
@@ -211,6 +322,7 @@ class Stage1TimeAwareTransformer(nn.Module):
             mlp_cfg=record_projection_cfg
         )
 
+        # Time-aware encoding (always needed)
         self.time_encoding = TimeAwareEncoding(
             d_model=d_model,
             max_len=max_seq_len,
@@ -219,6 +331,7 @@ class Stage1TimeAwareTransformer(nn.Module):
             use_time_encoding=use_time_encoding,
         )
 
+        # Transformer encoder (always needed)
         layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -228,15 +341,44 @@ class Stage1TimeAwareTransformer(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
 
-        # 使用注意力池化替代简单的平均池化
+        # Attention pooling (always needed)
         self.attention_pool = AttentionPooling(d_model)
 
-        # 在 Stage1TimeAwareTransformer.__init__ 中
-        # 对于极度不平衡数据，使用更简单的分类器
-        if dropout > 0.25:  # 高dropout时使用简化分类器
+        # 如果是分层注入模式(方案C)，初始化FlowFeatureEncoder和FlowFusion
+        if self.use_flow_fusion and not self.inject_to_packets:
+            flow_feature_dim = cfg.get("_flow_feature_dim", 0)
+            if flow_feature_dim > 0:
+                self.flow_encoder = FlowFeatureEncoder(
+                    flow_dim=flow_feature_dim,
+                    d_model=d_model,
+                    dropout=dropout
+                )
+
+                self.flow_fusion = FlowFusion(
+                    d_model=d_model,
+                    fusion_method=self.fusion_method,
+                    dropout=dropout
+                )
+
+                print(f"[INFO] 方案C - 分层特征注入已启用")
+                print(f"[INFO]   Flow特征维度: {flow_feature_dim}")
+                print(f"[INFO]   融合方法: {self.fusion_method}")
+                print(f"[INFO]   模型维度: {d_model}")
+            else:
+                print(f"[WARNING] 启用了flow_fusion但flow_feature_dim=0，将禁用flow融合")
+                self.use_flow_fusion = False
+        elif self.inject_to_packets:
+            print(f"[INFO] 方案A - Flow特征拼接到每个packet")
+            print(f"[INFO]   输入维度(含flow): {input_dim}")
+        else:
+            print(f"[INFO] 方案B - 仅使用Packet特征")
+            print(f"[INFO]   输入维度: {input_dim}")
+
+        # ---- Classifier ----
+        # For extremely imbalanced data, use simpler classifier with high dropout
+        if dropout > 0.25:
             self.classifier = nn.Sequential(
                 nn.LayerNorm(d_model),
                 nn.Dropout(dropout),
@@ -256,52 +398,65 @@ class Stage1TimeAwareTransformer(nn.Module):
                 nn.Dropout(dropout * 0.3),
                 nn.Linear(d_model // 2, 2),
             )
-        # num_classes = 2
-        #
-        # self.classifier = build_mlp(
-        #     input_dim=d_model,
-        #     output_dim=num_classes,
-        #     mlp_cfg=classifier_cfg,
-        #     default_dropout=dropout,
-        #     legacy_layer_factory=lambda: nn.Linear(d_model, num_classes),
-        # )
 
     def forward(
-        self,
-        x: torch.Tensor,
-        time_log: torch.Tensor,
-        mask: torch.Tensor,
-        return_embedding: bool = False,
+            self,
+            x: torch.Tensor,
+            time_log: torch.Tensor,
+            mask: torch.Tensor,
+            flow_feats: Optional[torch.Tensor] = None,
+            return_embedding: bool = False,
     ):
         """
         Args:
-            x:        [B, L, input_dim]
+            x:        [B, L, packet_dim] or [B, L, packet_dim + flow_dim]
             time_log: [B, L]
             mask:     [B, L], True for real packet, False for padding
+            flow_feats: [B, flow_dim], optional, only used when inject_to_packets=False
+            return_embedding: if True, returns (logits, z, h)
         """
-        e = self.projection(x)
-        e = self.time_encoding(e, time_log)
+        # 1. Record-level projection
+        e = self.projection(x)  # [B, L, d_model]
 
-        # PyTorch wants True where tokens should be ignored.
+        # 2. Time-aware encoding
+        e = self.time_encoding(e, time_log)  # [B, L, d_model]
+
+        # 3. Transformer encoding
         src_key_padding_mask = ~mask.bool()
+        h = self.encoder(e, src_key_padding_mask=src_key_padding_mask)  # [B, L, d_model]
 
-        h = self.encoder(e, src_key_padding_mask=src_key_padding_mask)
-        # z = self.masked_mean_pool(h, mask)
-        # 使用注意力池化
-        z = self.attention_pool(h, mask)
+        # 4. Pooling to get flow-level representation
+        z = self.attention_pool(h, mask)  # [B, d_model]
 
-        logits = self.classifier(z)
+        # 5. Flow feature fusion (方案C: 分层注入)
+        if self.use_flow_fusion and not self.inject_to_packets and flow_feats is not None:
+            # Encode flow features
+            flow_encoded = self.flow_encoder(flow_feats)  # [B, d_model]
+
+            # Fuse with pooled representation
+            z = self.flow_fusion(z, flow_encoded)  # [B, d_model]
+
+        # 6. Classification
+        logits = self.classifier(z)  # [B, 2]
 
         if return_embedding:
             return logits, z, h
-
-        # print("[INFO] model.py ------ forward")
 
         return logits
 
     @staticmethod
     def masked_mean_pool(h: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Simple mean pooling (kept for reference)."""
         mask_float = mask.float().unsqueeze(-1)
         h = h * mask_float
         denom = mask_float.sum(dim=1).clamp(min=1.0)
         return h.sum(dim=1) / denom
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """Return model configuration info for debugging."""
+        return {
+            "mode": "inject_to_packets" if self.inject_to_packets
+            else ("hierarchical_fusion" if self.use_flow_fusion else "packet_only"),
+            "use_flow_features": self.use_flow_fusion,
+            "fusion_method": self.fusion_method if self.use_flow_fusion else None,
+        }

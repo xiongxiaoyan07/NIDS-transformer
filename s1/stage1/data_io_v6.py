@@ -142,7 +142,6 @@ def generate_and_save_stage1_tensors(
         time: [max_seq_len]
         mask: [max_seq_len]
         label: scalar
-        flow_feats: [flow_feature_dim] (only when inject_to_packets=False)
 
     Save as .npz for reuse.
     """
@@ -156,32 +155,8 @@ def generate_and_save_stage1_tensors(
     flow_id_col = cfg["data"]["flow_id_col"]
     label_col = cfg["data"]["label_col"]
 
-    # 读取 flow 融合配置
-    flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
-    inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
-    use_flow_features = flow_fusion_cfg.get("enabled", False)
-
-    # ===== 确定特征维度 =====
-    packet_feature_dim = preprocessor.packet_feature_dim()
-    flow_feature_dim = preprocessor.flow_feature_dim() if (use_flow_fusion and not inject_to_packets) else 0
-
-    if inject_to_packets:
-        # 原有的行为：flow 特征拼接到每个 packet
-        feature_dim = preprocessor.input_dim()
-        print("[INFO] 模式: 方案A - Flow特征拼接到Packets")
-        print(f"[INFO] 输入维度（含flow特征）: {feature_dim}")
-    else:
-        # 新行为：packet 和 flow 特征分开存储
-        feature_dim = preprocessor.packet_feature_dim()
-        if use_flow_features and preprocessor.has_flow_features():
-            flow_feature_dim = preprocessor.flow_feature_dim()
-            print("[INFO] 模式: 方案C - 分层特征注入")
-            print(f"[INFO] 输入维度: packet={feature_dim}, flow={flow_feature_dim}")
-        else:
-            flow_feature_dim = 0
-            print("[INFO] 模式: 方案B - 仅Packet特征")
-            print(f"[INFO] 输入维度: packet={feature_dim}")
-
+    feature_dim = preprocessor.input_dim()
+    print("输入维度：", feature_dim)
     num_flows = len(flow_ids)
 
     x_tensor = np.zeros((num_flows, max_seq_len, feature_dim), dtype=np.float32)
@@ -189,35 +164,17 @@ def generate_and_save_stage1_tensors(
     mask_tensor = np.zeros((num_flows, max_seq_len), dtype=bool)
     labels = np.zeros((num_flows,), dtype=np.int64)
     flow_id_tensor = np.zeros((num_flows,), dtype=np.int64)
-    # 只有在分层模式下才创建 flow_feats 张量
-    if not inject_to_packets and use_flow_features and flow_feature_dim > 0:
-        flow_feats_tensor = np.zeros((num_flows, flow_feature_dim), dtype=np.float32)
-    else:
-        flow_feats_tensor = None
 
     flow_rows = {int(row[flow_id_col]): row for _, row in flows.iterrows()}
 
     for idx, fid in enumerate(flow_ids):
-        # 获取该flow的packet和flow数据
         pkt_df = packets[packets[flow_id_col] == fid].sort_values(cfg["data"]["packet_time_col"])
         flow_df = pd.DataFrame([flow_rows[fid]])
 
-        # Transform packet features
-        if inject_to_packets:
-            # 方案A: 拼接到每个packet
-            packet_x = preprocessor.transform_packets(pkt_df)
-            flow_x = preprocessor.transform_flows(flow_df)
-            flow_x_tiled = np.repeat(flow_x, repeats=len(pkt_df), axis=0)
-            x = np.concatenate([packet_x, flow_x_tiled], axis=1).astype(np.float32)
-        else:
-            # 方案B/C: 只用packet特征
-            packet_x = preprocessor.transform_packets_only(pkt_df)
-            x = packet_x.astype(np.float32)
-
-            # 方案C: 单独存储flow特征
-            if use_flow_features and flow_feats_tensor is not None:
-                flow_x = preprocessor.transform_flows(flow_df)
-                flow_feats_tensor[idx] = flow_x[0]
+        packet_x = preprocessor.transform_packets(pkt_df)
+        flow_x = preprocessor.transform_flows(flow_df)
+        flow_x_tiled = np.repeat(flow_x, repeats=len(pkt_df), axis=0)
+        x = np.concatenate([packet_x, flow_x_tiled], axis=1).astype(np.float32)
 
         # time log
         if packet_iat_col in pkt_df.columns:
@@ -234,22 +191,13 @@ def generate_and_save_stage1_tensors(
         flow_id_tensor[idx] = fid
 
     save_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz")
-
-    save_dict = {
-        'x': x_tensor,
-        'time': time_tensor,
-        'mask': mask_tensor,
-        'labels': labels,
-        'flow_ids': flow_id_tensor,
-    }
-
-    if flow_feats_tensor is not None:
-        save_dict['flow_feats'] = flow_feats_tensor
-
-    np.savez_compressed(save_path, **save_dict)
+    np.savez_compressed(save_path,
+                        x=x_tensor,
+                        time=time_tensor,
+                        mask=mask_tensor,
+                        labels=labels,
+                        flow_ids=flow_id_tensor)
     print(f"[INFO] saved precomputed stage1 tensors: {save_path}")
-    print(f"[INFO] Keys in saved file: {list(save_dict.keys())}")
-
     return save_path
 
 def get_or_generate_stage1_tensors(

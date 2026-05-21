@@ -286,15 +286,9 @@ def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
         mask = batch["mask"].to(device)
         y = batch["label"].to(device)
 
-        # 获取flow_feats（如果存在）
-        flow_feats = batch.get("flow_feats")
-        if flow_feats is not None:
-            flow_feats = flow_feats.to(device)
-
         optimizer.zero_grad(set_to_none=True)
 
-        # 调用模型时传入flow_feats
-        logits = model(x, t, mask, flow_feats=flow_feats)
+        logits = model(x, t, mask)
         loss = criterion(logits, y)
 
         loss.backward()
@@ -331,13 +325,8 @@ def evaluate_model(
         mask = batch["mask"].to(device)
         y = batch["label"].to(device)
 
-        # 获取flow_feats（如果存在）
-        flow_feats = batch.get("flow_feats")
-        if flow_feats is not None:
-            flow_feats = flow_feats.to(device)
-
         with torch.no_grad():
-            logits = model(x, t, mask, flow_feats=flow_feats)
+            logits = model(x, t, mask)
             loss = criterion(logits, y)
 
             probs = torch.softmax(logits, dim=-1)
@@ -367,6 +356,38 @@ def evaluate_model(
     )
 
     return metrics
+# def evaluate_model(model, loader, criterion, device) -> Dict[str, Any]:
+#     model.eval()
+#
+#     total_loss = 0.0
+#     total_count = 0
+#
+#     y_true = []
+#     y_pred = []
+#     y_score = []
+#
+#     for batch in loader:
+#         x = batch["x"].to(device)
+#         t = batch["time"].to(device)
+#         mask = batch["mask"].to(device)
+#         y = batch["label"].to(device)
+#
+#         logits = model(x, t, mask)
+#         loss = criterion(logits, y)
+#
+#         prob = torch.softmax(logits, dim=-1)
+#         pred = torch.argmax(prob, dim=-1)
+#
+#         total_loss += float(loss.item()) * x.size(0)
+#         total_count += x.size(0)
+#
+#         y_true.extend(y.detach().cpu().numpy().tolist())
+#         y_pred.extend(pred.detach().cpu().numpy().tolist())
+#         y_score.extend(prob[:, 1].detach().cpu().numpy().tolist())
+#
+#     metrics = classification_metrics(y_true, y_pred, y_score)
+#     metrics["loss"] = total_loss / max(total_count, 1)
+#     return metrics
 
 
 def find_optimal_threshold(model, val_loader, device, class_idx=1):
@@ -384,12 +405,7 @@ def find_optimal_threshold(model, val_loader, device, class_idx=1):
             mask = batch["mask"].to(device)
             y = batch["label"].to(device)
 
-            # 获取flow_feats（如果存在）
-            flow_feats = batch.get("flow_feats")
-            if flow_feats is not None:
-                flow_feats = flow_feats.to(device)
-
-            logits = model(x, t, mask, flow_feats=flow_feats)
+            logits = model(x, t, mask)
             probs = torch.softmax(logits, dim=-1)
 
             y_true.extend(y.cpu().numpy().tolist())

@@ -127,13 +127,6 @@ def build_dataloaders(
     preprocessor = Stage1Preprocessor(cfg)
     preprocessor.fit(train_packets, train_flows)
 
-    # ===== 新增：设置flow特征维度到config =====
-    flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
-    if flow_fusion_cfg.get("enabled", False) and not flow_fusion_cfg.get("inject_to_packets", True):
-        # 方案C模式：需要知道flow特征维度
-        cfg["_flow_feature_dim"] = preprocessor.flow_feature_dim()
-        print(f"[INFO] 方案C模式：flow特征维度={cfg['_flow_feature_dim']}")
-
     # 在 build_dataloaders 内
     save_dir = os.path.join(out_dir, "precomputed")
 

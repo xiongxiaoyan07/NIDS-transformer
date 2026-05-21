@@ -199,7 +199,23 @@ class Stage1Preprocessor:
             raise ValueError("No packet features selected.")
 
         if not self.flow_num_cols and not self.flow_cat_cols and not self.flow_bin_cols:
-            raise ValueError("No flow features selected.")
+            print("[WARNING] No flow features selected. Flow features will not be used.")
+            # Don't raise error, just skip flow feature fitting 可以没有flow特征，只使用packet的
+        else:
+            flow_num = self._numeric_matrix(
+                flow_train,
+                self.flow_num_cols,
+                scope="flow",
+                fit_clip=True,
+            )
+
+            if flow_num.shape[1] > 0 and self.flow_scaler is not None:
+                self.flow_scaler.fit(flow_num)
+
+            flow_cat = self._categorical_matrix(flow_train, self.flow_cat_cols)
+
+            if flow_cat.shape[1] > 0:
+                self.flow_ohe.fit(flow_cat)
 
         packet_num = self._numeric_matrix(
             packet_train,
@@ -208,29 +224,56 @@ class Stage1Preprocessor:
             fit_clip=True,
         )
 
-        flow_num = self._numeric_matrix(
-            flow_train,
-            self.flow_num_cols,
-            scope="flow",
-            fit_clip=True,
-        )
-
         if packet_num.shape[1] > 0 and self.packet_scaler is not None:
             self.packet_scaler.fit(packet_num)
 
-        if flow_num.shape[1] > 0 and self.flow_scaler is not None:
-            self.flow_scaler.fit(flow_num)
-
         packet_cat = self._categorical_matrix(packet_train, self.packet_cat_cols)
-        flow_cat = self._categorical_matrix(flow_train, self.flow_cat_cols)
 
         if packet_cat.shape[1] > 0:
             self.packet_ohe.fit(packet_cat)
 
-        if flow_cat.shape[1] > 0:
-            self.flow_ohe.fit(flow_cat)
-
         self.fitted = True
+
+    def transform_packets_only(self, packets: pd.DataFrame) -> np.ndarray:
+        """
+        Transform only packet features (without flow features concatenated).
+        Used for hierarchical fusion mode.
+
+        Output order:
+            [scaled numerical features;
+             one-hot categorical features;
+             raw binary features]
+        """
+        self._check_fitted()
+        packets = self.add_derived_packet_features(packets)
+
+        parts = []
+
+        packet_num = self._numeric_matrix(
+            packets,
+            self.packet_num_cols,
+            scope="packet",
+            fit_clip=False,
+        )
+
+        if packet_num.shape[1] > 0:
+            packet_num = self._scale_numeric(packet_num, self.packet_scaler)
+            parts.append(packet_num)
+
+        packet_cat = self._categorical_matrix(packets, self.packet_cat_cols)
+
+        if packet_cat.shape[1] > 0:
+            parts.append(self.packet_ohe.transform(packet_cat).astype(np.float32))
+
+        packet_bin = self._binary_matrix(packets, self.packet_bin_cols)
+
+        if packet_bin.shape[1] > 0:
+            parts.append(packet_bin)
+
+        if not parts:
+            return np.zeros((len(packets), 0), dtype=np.float32)
+
+        return np.concatenate(parts, axis=1).astype(np.float32)
 
     def transform_packets(self, packets: pd.DataFrame) -> np.ndarray:
         """
@@ -314,9 +357,17 @@ class Stage1Preprocessor:
     def input_dim(self) -> int:
         """
         Final x_i,t dimension:
-            packet_feature_dim + flow_feature_dim
+            packet_feature_dim + flow_feature_dim (when inject_to_packets=True)
+            or packet_feature_dim only (when inject_to_packets=False)
         """
-        return self.packet_feature_dim() + self.flow_feature_dim()
+        # Check the config to determine behavior
+        flow_fusion_cfg = self.cfg.get("features", {}).get("flow_fusion", {})
+        inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
+
+        if inject_to_packets:
+            return self.packet_feature_dim() + self.flow_feature_dim()
+        else:
+            return self.packet_feature_dim()
 
     def packet_feature_dim(self) -> int:
         dim = len(self.packet_num_cols)
@@ -337,6 +388,12 @@ class Stage1Preprocessor:
         dim += len(self.flow_bin_cols)
 
         return int(dim)
+
+    def has_flow_features(self) -> bool:
+        """Check if any flow features are configured."""
+        return (len(self.flow_num_cols) > 0 or
+                len(self.flow_cat_cols) > 0 or
+                len(self.flow_bin_cols) > 0)
 
     def summary(self) -> Dict[str, Any]:
         """
@@ -372,6 +429,7 @@ class Stage1Preprocessor:
             "packet_feature_dim": self.packet_feature_dim(),
             "flow_feature_dim": self.flow_feature_dim(),
             "input_dim": self.input_dim(),
+            "has_flow_features": self.has_flow_features(),
         }
 
     def _resolve_columns(

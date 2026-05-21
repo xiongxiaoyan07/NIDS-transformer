@@ -74,11 +74,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] device={device}")
 
-    # Step 1: Build dataloaders and preprocessor
-    print("\n" + "=" * 60)
-    print("[STEP 1] Building dataloaders...")
-    print("=" * 60)
-
     loaders, preprocessor, metadata = build_dataloaders(
         packet_csv=args.packet_csv,
         flow_csv=args.flow_csv,
@@ -87,11 +82,6 @@ def main():
         external_packet_csv=args.external_packet_csv,
         external_flow_csv=args.external_flow_csv,
     )
-    # Print summary
-    print("\n[INFO] Preprocessor Summary:")
-    for key, value in metadata.items():
-        print(f"  {key}: {value}")
-
     # ===== 关键修改 =====
     # 直接从原始数据获取真实的训练标签分布
     # 从 metadata 中获取真实的类别计数
@@ -110,43 +100,8 @@ def main():
     print(metadata["preprocessor"])
     print("label_counts_train", metadata["label_counts_train"])
 
-    # Step 2: Determine model input dimensions
-    print("\n" + "=" * 60)
-    print("[STEP 2] Building model...")
-    print("=" * 60)
-    flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
-    inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
-    use_flow_features = flow_fusion_cfg.get("enabled", False)
-
-    if inject_to_packets and use_flow_features:
-        # 方案A: flow特征拼接到packet
-        input_dim = preprocessor.input_dim()
-        print(f"[INFO] 方案A - Flow特征拼接到每个Packet")
-        print(f"[INFO]   Input dim (with flow): {input_dim}")
-        # 不需要flow_feature_dim
-        cfg["_flow_feature_dim"] = 0
-    elif not inject_to_packets and use_flow_features and preprocessor.has_flow_features():
-        # 方案C: 分层特征注入
-        input_dim = preprocessor.packet_feature_dim()
-        flow_dim = preprocessor.flow_feature_dim()
-        cfg["_flow_feature_dim"] = flow_dim
-        print(f"[INFO] 方案C - 分层特征注入")
-        print(f"[INFO]   Packet input dim: {input_dim}")
-        print(f"[INFO]   Flow feature dim: {flow_dim}")
-    else:
-        # 方案B: 仅packet特征
-        input_dim = preprocessor.packet_feature_dim()
-        cfg["_flow_feature_dim"] = 0
-        print(f"[INFO] 方案B - 仅使用Packet特征")
-        print(f"[INFO]   Input dim: {input_dim}")
-
-    # Build model
-    model = Stage1TimeAwareTransformer(
-        input_dim=input_dim,
-        cfg=cfg,
-    ).to(device)
-    # input_dim = preprocessor.input_dim()
-    # model = Stage1TimeAwareTransformer(input_dim=input_dim, cfg=cfg).to(device)
+    input_dim = preprocessor.input_dim()
+    model = Stage1TimeAwareTransformer(input_dim=input_dim, cfg=cfg).to(device)
 
     # 打印参数量
     total_params, trainable_params = count_parameters(model)
@@ -170,10 +125,6 @@ def main():
     print(f"\n  Model size: {size_all_mb:.2f} MB")
     print(f"{'=' * 60}\n")
 
-    # Step 3: Train
-    print("\n" + "=" * 60)
-    print("[STEP 3] Training model...")
-    print("=" * 60)
     run_summary = train_model(
         model=model,
         loaders=loaders,
