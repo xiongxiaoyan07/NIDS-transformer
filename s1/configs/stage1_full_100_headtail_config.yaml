@@ -11,9 +11,9 @@ data:
   packet_iat_col: flow_iat_us
 
 sequence:
-  max_seq_len: 64
+  max_seq_len: 100
   # options: head, head_tail, random
-  strategy: head
+  strategy: head_tail
 
 split:
   train_size: 0.70
