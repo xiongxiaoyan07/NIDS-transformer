@@ -1,0 +1,131 @@
+# Stage1 configuration.
+# 你可以通过修改这个文件决定 flow-level 和 packet-level 到底用哪些字段。
+
+seed: 42
+strict_schema: false
+
+data:
+  flow_id_col: flow_id
+  label_col: label
+  packet_time_col: timestamp_us
+  packet_iat_col: flow_iat_us
+
+sequence:
+  max_seq_len: 64
+  # options: head, head_tail, random
+  strategy: head
+
+split:
+  train_size: 0.70
+  val_size: 0.10
+  test_size: 0.20
+  stratify: true
+
+features:
+  # 绝对时间字段一般不推荐作为模型输入，避免数据泄漏。
+  # flow_iat_us 会被转为 log1p 后用于 temporal feature 和 time-aware encoding。
+  packet:
+    categorical:
+      - ip_version
+      - protocol
+      - l7_proto
+      - icmp_type
+      - icmp_code
+    numerical:
+      - pkt_len
+      - ip_len
+      - payload_len
+      - ttl_or_hop_limit
+      - tcp_window
+      - tcp_header_len
+      - udp_len
+      - log_flow_iat_us
+    binary:
+      - direction
+      - has_tcp
+      - has_udp
+      - has_icmp
+      - tcp_fin
+      - tcp_syn
+      - tcp_rst
+      - tcp_psh
+      - tcp_ack_flag
+      - tcp_urg
+      - tcp_ece
+      - tcp_cwr
+
+  # flow-level 字段完全可配置。
+  # 不建议默认使用 source_ip / destination_ip，因为 IP one-hot 维度大且容易产生环境偏差。
+  flow:
+#    categorical:
+#      - protocol
+#      - has_init_win_bytes_forward
+#      - has_init_win_bytes_backward
+    numerical:
+      - flow_duration
+      - total_fwd_packets
+      - total_backward_packets
+      - total_length_of_fwd_packets
+      - total_length_of_bwd_packets
+    binary:
+      - has_init_win_bytes_forward
+      - has_init_win_bytes_backward
+  flow_fusion:
+    # 方案A: [packet_feats; flow_feats_tiled] → 每个packet都包含flow信息
+#    enabled: true
+#    inject_to_packets: true   # true=拼接到packet
+#    method: "concat"           # 方案A不需要此参数，但保持兼容  concat, add, gated
+    #方案B [packet_feats] → 不使用flow信息
+    "enabled": False,
+    "inject_to_packets": False,
+    "method": "none",
+    #方案C-[packet_feats] + [flow_feats_separate] → 通过融合层注入
+#    "enabled": True,
+#    "inject_to_packets": False,
+#    "method": "gated",
+preprocessing:
+  numerical:
+    scaler: standard     # 可选: standard / robust / none
+
+    clip:
+      enabled: true
+      lower_quantile: 0.001
+      upper_quantile: 0.999
+
+    log1p:
+      packet:
+        - pkt_len
+        - ip_len
+        - payload_len
+        - tcp_window
+        - tcp_header_len
+        - udp_len
+
+      flow:
+        - flow_duration
+        - total_fwd_packets
+        - total_backward_packets
+        - total_length_of_fwd_packets
+        - total_length_of_bwd_packets
+
+model:
+  d_model: 128          # 回退到128（数据量不足以支撑256）
+  nhead: 8
+  num_layers: 2         # 回退到2层（减少过拟合）
+  dim_feedforward: 512  # 回退到512
+  dropout: 0.3          # 增加dropout防止过拟合
+  use_positional_encoding: false
+  use_time_encoding: false
+
+training:
+  epochs: 1000
+  batch_size: 64
+  lr: 0.0003            # 降低学习率（更稳定的训练）
+  weight_decay: 0.0005  # 增加权重衰减（防止过拟合）
+  num_workers: 0
+  focal_gamma: 2.0      # 恢复到2.0（极度不平衡数据需要）
+  early_stop_patience: 40  # 增加patience（给模型更多时间）
+  monitor_metric: f1_label1
+  monitor_mode: max
+  label_smoothing: 0.05  # 适度标签平滑
+  threshold_search: true
