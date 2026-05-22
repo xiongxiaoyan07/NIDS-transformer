@@ -131,7 +131,10 @@ class TimeAwareEncoding(nn.Module):
         #     # 假设已经是原始间隔
         #     time_intervals = time_log
         # 所有的time的数据在预处理的时候都加上了log1p,所以这里就直接反推原始间隔，不然配置太多改动太大
-        time_intervals = torch.exp(time_log) - 1.0
+        # 反推原始间隔
+        time_intervals = torch.expm1(time_log)
+        # 确保非负
+        time_intervals = torch.clamp(time_intervals, min=0.0)
         # 累积求和
         cumulative_time = torch.cumsum(time_intervals, dim=1)
 
@@ -139,24 +142,6 @@ class TimeAwareEncoding(nn.Module):
         p = torch.log(1.0 + cumulative_time + self.alpha)
 
         return p
-    # def _compute_time_feature(self, time_intervals: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Compute smoothed time feature p (Equation 5 from paper).
-    #
-    #     p_i = log(1 + Σ(time_intervals_0_to_i) + α)
-    #
-    #     Args:
-    #         time_intervals: [B, L] - time intervals between packets
-    #     Returns:
-    #         p: [B, L] - smoothed accumulated time
-    #     """
-    #     # Cumulative sum of time intervals
-    #     cumulative_time = torch.cumsum(time_intervals, dim=1)  # [B, L]
-    #
-    #     # Log smoothing: p_i = log(1 + cumulative_time_i + alpha)
-    #     p = torch.log(1.0 + cumulative_time + self.alpha)
-    #
-    #     return p
 
     def _time_aware_encoding(self, seq_len: int, p: torch.Tensor) -> torch.Tensor:
         """

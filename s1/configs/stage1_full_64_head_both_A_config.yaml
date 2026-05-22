@@ -39,7 +39,7 @@ features:
       - tcp_window
       - tcp_header_len
       - udp_len
-      - log_flow_iat_us
+#      - log_flow_iat_us
     binary:
       - direction
       - has_tcp
@@ -160,6 +160,7 @@ preprocessing:
         - pkt_len
         - ip_len
         - payload_len
+        - ttl_or_hop_limit
         - tcp_window
         - tcp_header_len
         - udp_len

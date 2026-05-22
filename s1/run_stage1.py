@@ -89,26 +89,15 @@ def main():
     )
     # Print summary
     print("\n[INFO] Preprocessor Summary:")
-    for key, value in metadata.items():
-        print(f"  {key}: {value}")
-
-    # ===== 关键修改 =====
-    # 直接从原始数据获取真实的训练标签分布
-    # 从 metadata 中获取真实的类别计数
-    label_counts = metadata["label_counts_train"]
-    print(f"[INFO] 真实训练集类别分布: {label_counts}")
-
-    # 重建真实的标签列表（用于计算类别权重）
-    train_dataset = loaders["train"].dataset
-    train_labels = train_dataset.labels.tolist()
-
-    # 验证分布
-    unique, counts = np.unique(train_labels, return_counts=True)
-    print(f"[INFO] 训练集实际类别分布: {dict(zip(unique, counts))}")
-
-    print("[INFO] preprocessor summary:")
-    print(metadata["preprocessor"])
-    print("label_counts_train", metadata["label_counts_train"])
+    print("external_test", metadata["external_test"])
+    print("num_train_flows", metadata["num_train_flows"])
+    print("num_val_flows", metadata["num_val_flows"])
+    print("num_test_flows", metadata["num_test_flows"])
+    # 从 metadata 中获取真实的类别计数)
+    print("真实训练集类别分布 label_counts_train", metadata["label_counts_train"])
+    print("label_counts_val", metadata["label_counts_val"])
+    print("label_counts_test", metadata["label_counts_test"])
+    print("preprocessor", metadata["preprocessor"])
 
     # Step 2: Determine model input dimensions
     print("\n" + "=" * 60)

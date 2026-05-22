@@ -155,129 +155,102 @@ def generate_and_save_stage1_tensors(
     packet_iat_col = cfg["data"]["packet_iat_col"]
     flow_id_col = cfg["data"]["flow_id_col"]
     label_col = cfg["data"]["label_col"]
-    packet_time_col = cfg["data"]["packet_time_col"]
 
     # 读取 flow 融合配置
     flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
     inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
     use_flow_features = flow_fusion_cfg.get("enabled", False)
 
-    # 1. 固定 flow_ids 顺序
-    flow_ids = [int(x) for x in flow_ids]
-    num_flows = len(flow_ids)
-
-    # 2. 只保留需要的 flow，并按 flow_ids 排序
-    flow_order = pd.DataFrame({flow_id_col: flow_ids})
-    flows_sub = flow_order.merge(flows, on=flow_id_col, how="left")
-
-    if flows_sub[label_col].isna().any():
-        missing = flows_sub.loc[flows_sub[label_col].isna(), flow_id_col].tolist()[:10]
-        raise ValueError(f"Some flow_ids are missing in flows. Examples: {missing}")
-
-    labels = flows_sub[label_col].astype(int).to_numpy(dtype=np.int64)
-    flow_id_tensor = np.asarray(flow_ids, dtype=np.int64)
-
-    # 3. packets 一次性排序
-    packets_sub = packets[packets[flow_id_col].isin(flow_ids)].copy()
-    packets_sub = packets_sub.sort_values([flow_id_col, packet_time_col])
-
-    # 4. 一次性转换所有 packet features
-    # 注意：这里先只做 packet features，不拼 flow features
-    packet_x_all = preprocessor.transform_packets_only(packets_sub).astype(np.float32)
-    print("[DEBUG] packet_x_all shape:", packet_x_all.shape)
-    print("[DEBUG] packet_x_all sample:\n", packet_x_all[:1, :])  # 打印前5个packet的前10个特征
-
-    # 5. 一次性构造 time
-    if packet_iat_col in packets_sub.columns:
-        time_raw_all = (
-            pd.to_numeric(packets_sub[packet_iat_col], errors="coerce")
-            .fillna(0)
-            .clip(lower=0)
-            .to_numpy(dtype=np.float32)
-        )
-        time_log_all = np.log1p(time_raw_all).astype(np.float32)
-    else:
-        time_log_all = np.zeros(len(packets_sub), dtype=np.float32)
-
-    # 如果你想彻底去掉 flow_iat_us 信息，可以改成：
-    # time_log_all = np.zeros(len(packets_sub), dtype=np.float32)
-
-    # 6. 一次性转换所有 flow features
-    if use_flow_features and preprocessor.has_flow_features():
-        flow_x_all = preprocessor.transform_flows(flows_sub).astype(np.float32)
-        print("[DEBUG] flow_x_all shape:", flow_x_all.shape)
-        print("[DEBUG] flow_x_all sample:\n", flow_x_all[:1, :])
-    else:
-        flow_x_all = None
-
-    packet_feature_dim = preprocessor.packet_feature_dim()
-
-    if inject_to_packets and use_flow_features and flow_x_all is not None:
-        flow_feature_dim = preprocessor.flow_feature_dim()
-        feature_dim = packet_feature_dim + flow_feature_dim
-        flow_feats_tensor = None
+    # ===== 确定特征维度 =====
+    # packet_feature_dim = preprocessor.packet_feature_dim()
+    # flow_feature_dim = preprocessor.flow_feature_dim() if (use_flow_fusion and not inject_to_packets) else 0
+    flow_feature_dim = 0
+    if inject_to_packets:
+        # 原有的行为：flow 特征拼接到每个 packet
+        feature_dim = preprocessor.input_dim()
         print("[INFO] 模式: 方案A - Flow特征拼接到Packets")
-    elif not inject_to_packets and use_flow_features and flow_x_all is not None:
-        flow_feature_dim = preprocessor.flow_feature_dim()
-        feature_dim = packet_feature_dim
-        flow_feats_tensor = flow_x_all
-        print("[INFO] 模式: 方案C - 分层特征注入")
+        print(f"[INFO] 输入维度（含flow特征）: {feature_dim}")
     else:
-        feature_dim = packet_feature_dim
-        flow_feats_tensor = None
-        print("[INFO] 模式: 方案B - 仅Packet特征")
+        # 新行为：packet 和 flow 特征分开存储
+        feature_dim = preprocessor.packet_feature_dim()
+        if use_flow_features and preprocessor.has_flow_features():
+            flow_feature_dim = preprocessor.flow_feature_dim()
+            print("[INFO] 模式: 方案C - 分层特征注入")
+            print(f"[INFO] 输入维度: packet={feature_dim}, flow={flow_feature_dim}")
+        else:
+            flow_feature_dim = 0
+            print("[INFO] 模式: 方案B - 仅Packet特征")
+            print(f"[INFO] 输入维度: packet={feature_dim}")
+
+    num_flows = len(flow_ids)
 
     x_tensor = np.zeros((num_flows, max_seq_len, feature_dim), dtype=np.float32)
     time_tensor = np.zeros((num_flows, max_seq_len), dtype=np.float32)
     mask_tensor = np.zeros((num_flows, max_seq_len), dtype=bool)
+    labels = np.zeros((num_flows,), dtype=np.int64)
+    flow_id_tensor = np.zeros((num_flows,), dtype=np.int64)
+    # 只有在分层模式下才创建 flow_feats 张量
+    if not inject_to_packets and use_flow_features and flow_feature_dim > 0:
+        flow_feats_tensor = np.zeros((num_flows, flow_feature_dim), dtype=np.float32)
+    else:
+        flow_feats_tensor = None
 
-    # 7. 用 groupby.indices 避免每个 fid 全表扫描
-    group_indices = packets_sub.groupby(flow_id_col, sort=False).indices
+    flow_rows = {int(row[flow_id_col]): row for _, row in flows.iterrows()}
 
-    flow_id_to_row = {fid: i for i, fid in enumerate(flow_ids)}
+    for idx, fid in enumerate(flow_ids):
+        # 获取该flow的packet和flow数据
+        pkt_df = packets[packets[flow_id_col] == fid].sort_values(cfg["data"]["packet_time_col"])
+        flow_df = pd.DataFrame([flow_rows[fid]])
 
-    for fid, row_idx in flow_id_to_row.items():
-        indices = group_indices.get(fid)
-
-        if indices is None:
-            print("indices is none")
-            continue
-
-        real_len = min(len(indices), max_seq_len)
-        idxs = indices[:real_len]
-
-        if inject_to_packets and use_flow_features and flow_x_all is not None:
-            x_tensor[row_idx, :real_len, :packet_feature_dim] = packet_x_all[idxs]
-            x_tensor[row_idx, :real_len, packet_feature_dim:] = flow_x_all[row_idx]
+        # Transform packet features
+        if inject_to_packets:
+            # 方案A: 拼接到每个packet
+            packet_x = preprocessor.transform_packets(pkt_df)
+            flow_x = preprocessor.transform_flows(flow_df)
+            flow_x_tiled = np.repeat(flow_x, repeats=len(pkt_df), axis=0)
+            x = np.concatenate([packet_x, flow_x_tiled], axis=1).astype(np.float32)
         else:
-            x_tensor[row_idx, :real_len] = packet_x_all[idxs]
+            # 方案B/C: 只用packet特征
+            packet_x = preprocessor.transform_packets_only(pkt_df)
+            x = packet_x.astype(np.float32)
 
-        time_tensor[row_idx, :real_len] = time_log_all[idxs]
-        mask_tensor[row_idx, :real_len] = True
+            # 方案C: 单独存储flow特征
+            if use_flow_features and flow_feats_tensor is not None:
+                flow_x = preprocessor.transform_flows(flow_df)
+                flow_feats_tensor[idx] = flow_x[0]
 
-    save_path = os.path.join(
-        out_dir,
-        f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz"
-    )
+        # time log 0522-v7(old code) v2 TE(pos+p) instead of PE(pos) + MLP(time) 这里最好是使用原始的time_raw，而不是time_log
+        # 但是由于我原来已经生成了很多.npz文件，我不想重新生成这些文件了，因为非常耗时，所以我在model中使用反运算推算原始的time_raw
+        if packet_iat_col in pkt_df.columns:
+            time_raw = pd.to_numeric(pkt_df[packet_iat_col], errors="coerce").fillna(0).clip(lower=0).to_numpy(dtype=np.float32)
+        else:
+            time_raw = np.zeros(len(pkt_df), dtype=np.float32)
+        time_log = np.log1p(time_raw).astype(np.float32)
+
+        real_len = min(len(pkt_df), max_seq_len)
+        x_tensor[idx, :real_len] = x[:real_len]
+        time_tensor[idx, :real_len] = time_log[:real_len]
+        mask_tensor[idx, :real_len] = True
+        labels[idx] = int(flow_rows[fid][label_col])
+        flow_id_tensor[idx] = fid
+
+    save_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz")
 
     save_dict = {
-        "x": x_tensor,
-        "time": time_tensor,
-        "mask": mask_tensor,
-        "labels": labels,
-        "flow_ids": flow_id_tensor,
+        'x': x_tensor,
+        'time': time_tensor,
+        'mask': mask_tensor,
+        'labels': labels,
+        'flow_ids': flow_id_tensor,
     }
 
     if flow_feats_tensor is not None:
         save_dict['flow_feats'] = flow_feats_tensor
         print(f"[INFO] **************** stage1 flow_feats tensors")
 
-    # 重要：compressed 很慢。训练阶段建议先用 uncompressed。
-    np.savez(save_path, **save_dict)
-
+    np.savez_compressed(save_path, **save_dict)
     print(f"[INFO] saved precomputed stage1 tensors: {save_path}")
     print(f"[INFO] Keys in saved file: {list(save_dict.keys())}")
-    print("[INFO] data_io.py ------ generate_and_save_stage1_tensors_fast --- end")
 
     return save_path
 
