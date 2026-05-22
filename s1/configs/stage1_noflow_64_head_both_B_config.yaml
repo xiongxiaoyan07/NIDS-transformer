@@ -116,6 +116,9 @@ model:
   dropout: 0.3          # 增加dropout防止过拟合
   use_positional_encoding: true
   use_time_encoding: true
+  # 新增：时间编码配置
+  time_encoding:
+    alpha: 1.0e-07  # 平滑因子（论文默认值
 
 training:
   epochs: 1000

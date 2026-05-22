@@ -162,9 +162,9 @@ def generate_and_save_stage1_tensors(
     use_flow_features = flow_fusion_cfg.get("enabled", False)
 
     # ===== 确定特征维度 =====
-    packet_feature_dim = preprocessor.packet_feature_dim()
-    flow_feature_dim = preprocessor.flow_feature_dim() if (use_flow_fusion and not inject_to_packets) else 0
-
+    # packet_feature_dim = preprocessor.packet_feature_dim()
+    # flow_feature_dim = preprocessor.flow_feature_dim() if (use_flow_fusion and not inject_to_packets) else 0
+    flow_feature_dim = 0
     if inject_to_packets:
         # 原有的行为：flow 特征拼接到每个 packet
         feature_dim = preprocessor.input_dim()
@@ -219,7 +219,8 @@ def generate_and_save_stage1_tensors(
                 flow_x = preprocessor.transform_flows(flow_df)
                 flow_feats_tensor[idx] = flow_x[0]
 
-        # time log
+        # time log 0522-v7(old code) v2 TE(pos+p) instead of PE(pos) + MLP(time) 这里最好是使用原始的time_raw，而不是time_log
+        # 但是由于我原来已经生成了很多.npz文件，我不想重新生成这些文件了，因为非常耗时，所以我在model中使用反运算推算原始的time_raw
         if packet_iat_col in pkt_df.columns:
             time_raw = pd.to_numeric(pkt_df[packet_iat_col], errors="coerce").fillna(0).clip(lower=0).to_numpy(dtype=np.float32)
         else:

@@ -1,7 +1,8 @@
 """
 Stage1 model:
 - record-level projection
-- time-aware encoding (paper: TE(pos+p) instead of PE(pos) + MLP(time))
+- positional encoding
+- time-aware encoding based on flow_iat_us
 - Transformer encoder
 - masked pooling
 - classifier
@@ -14,7 +15,6 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .build_mlp import build_mlp
 
@@ -29,6 +29,8 @@ class RecordLevelProjection(nn.Module):
 
     def __init__(self, input_dim: int, d_model: int, dropout: float, mlp_cfg: dict | None = None):
         super().__init__()
+        # 如果你旧版 projection 不是纯 Linear，而是 Linear + Dropout / LayerNorm，
+        # 可以把 legacy_layer_factory 改成旧版原始结构。
         self.proj = build_mlp(
             input_dim=input_dim,
             output_dim=d_model,
@@ -43,56 +45,43 @@ class RecordLevelProjection(nn.Module):
 
 class TimeAwareEncoding(nn.Module):
     """
-    Time-Aware Encoding based on the paper.
+    Add position and continuous-time information.
 
-    Core idea: Instead of separate PE(pos) + MLP(time), 
-    integrate time directly into sinusoidal encoding:
+    e_tilde_i,t = e_i,t + PE(t) + TimeMLP(log(1 + flow_iat_us_t))
 
-    TE(pos, 2j) = sin((pos + p) / 10000^(2j/d_model))
-    TE(pos, 2j+1) = cos((pos + p) / 10000^(2j/d_model))
-
-    where p = log(1 + Σ(time_intervals_up_to_pos) + α)
+    Config switches:
+        use_positional_encoding
+        use_time_encoding
     """
 
     def __init__(
-            self,
-            d_model: int,
-            max_len: int,
-            dropout: float,
-            use_positional_encoding: bool,
-            use_time_encoding: bool,
-            alpha: float = 1e-07,  # smoothing factor from paper
-            time_data_format='log1p'
+        self,
+        d_model: int,
+        max_len: int,
+        dropout: float,
+        use_positional_encoding: bool,
+        use_time_encoding: bool,
     ):
         super().__init__()
         self.use_positional_encoding = use_positional_encoding
         self.use_time_encoding = use_time_encoding
-        self.alpha = alpha
-        self.time_data_format = time_data_format  # 'log1p' or 'raw'
-        self.d_model = d_model
         self.dropout = nn.Dropout(dropout)
 
-        # Pre-compute div_term for sinusoidal encoding
-        # div_term = 1 / 10000^(2j/d_model)
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2, dtype=torch.float32)
-            * (-math.log(10000.0) / d_model)
+        # Sinusoidal position encoding.
+        # Registered as buffer because it is not trainable.
+        pe = self._build_sinusoidal_pe(max_len, d_model)
+        self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
+
+        # Continuous-time encoding.
+        # Input should be log(1 + flow_iat_us), shape [B, L].
+        self.time_mlp = nn.Sequential(
+            nn.Linear(1, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
         )
-        self.register_buffer('div_term', div_term, persistent=False)
-
-        # Position indices [0, 1, 2, ..., max_len-1]
-        position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)  # [max_len, 1]
-        self.register_buffer('position', position, persistent=False)
-
-        # For backward compatibility: when use_time_encoding=False but use_positional_encoding=True,
-        # we use traditional PE (p=0). Store precomputed PE for efficiency.
-        if not use_time_encoding and use_positional_encoding:
-            pe = self._build_sinusoidal_pe(max_len, d_model)
-            self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
 
     @staticmethod
     def _build_sinusoidal_pe(max_len: int, d_model: int) -> torch.Tensor:
-        """Traditional positional encoding (for backward compatibility)."""
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float32).unsqueeze(1)
 
@@ -110,87 +99,6 @@ class TimeAwareEncoding(nn.Module):
 
         return pe
 
-    def _compute_time_feature(self, time_log):
-        """
-        兼容两种 time 数据格式
-
-        Args:
-            time_log: [B, L]
-                - 如果 time_data_format='log1p': log(1 + interval)，需要反推
-                - 如果 time_data_format='raw': 原始 interval
-        Returns:
-            p: [B, L] - 平滑累积时间
-        """
-        # if self.time_data_format == 'log1p':
-        #     # 反推原始间隔: interval = exp(log1p(interval)) - 1
-        #     time_intervals = torch.exp(time_log) - 1.0
-        # elif self.time_data_format == 'raw':
-        #     # 直接使用原始间隔
-        #     time_intervals = time_log
-        # else:
-        #     # 假设已经是原始间隔
-        #     time_intervals = time_log
-        # 所有的time的数据在预处理的时候都加上了log1p,所以这里就直接反推原始间隔，不然配置太多改动太大
-        time_intervals = torch.exp(time_log) - 1.0
-        # 累积求和
-        cumulative_time = torch.cumsum(time_intervals, dim=1)
-
-        # 对数平滑: p = log(1 + Σ(interval) + α)
-        p = torch.log(1.0 + cumulative_time + self.alpha)
-
-        return p
-    # def _compute_time_feature(self, time_intervals: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Compute smoothed time feature p (Equation 5 from paper).
-    #
-    #     p_i = log(1 + Σ(time_intervals_0_to_i) + α)
-    #
-    #     Args:
-    #         time_intervals: [B, L] - time intervals between packets
-    #     Returns:
-    #         p: [B, L] - smoothed accumulated time
-    #     """
-    #     # Cumulative sum of time intervals
-    #     cumulative_time = torch.cumsum(time_intervals, dim=1)  # [B, L]
-    #
-    #     # Log smoothing: p_i = log(1 + cumulative_time_i + alpha)
-    #     p = torch.log(1.0 + cumulative_time + self.alpha)
-    #
-    #     return p
-
-    def _time_aware_encoding(self, seq_len: int, p: torch.Tensor) -> torch.Tensor:
-        """
-        Compute time-aware encoding (Equation 6-7 from paper).
-
-        TE(pos, 2j) = sin((pos + p) / 10000^(2j/d_model))
-        TE(pos, 2j+1) = cos((pos + p) / 10000^(2j/d_model))
-
-        Args:
-            seq_len: sequence length
-            p: [B, L] - smoothed time feature
-        Returns:
-            te: [B, L, d_model] - time-aware encoding
-        """
-        batch_size = p.size(0)
-        device = p.device
-
-        # Position indices for this sequence
-        pos = self.position[:seq_len, :]  # [L, 1]
-
-        # Combine position and time: pos + p
-        # pos: [L, 1] -> [1, L, 1]
-        # p: [B, L] -> [B, L, 1]
-        combined = pos.unsqueeze(0) + p.unsqueeze(-1)  # [B, L, 1]
-
-        # Apply sinusoidal functions
-        arg = combined * self.div_term  # [B, L, d_model//2]
-
-        te = torch.zeros(batch_size, seq_len, self.d_model, device=device)
-        te[:, :, 0::2] = torch.sin(arg)
-        te[:, :, 1::2] = torch.cos(arg)
-
-        return te
-
     def forward(self, e: torch.Tensor, time_log: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -206,42 +114,21 @@ class TimeAwareEncoding(nn.Module):
             Encoded packet sequence.
             Shape: [B, L, d_model]
         """
-        batch_size, seq_len, _ = e.shape
+        seq_len = e.size(1)
+        out = e
 
-        # Ensure time_log is 2D
-        if time_log.dim() == 3:
-            time_log = time_log.squeeze(-1)
+        if self.use_positional_encoding:
+            out = out + self.pe[:, :seq_len, :]
 
-        if self.use_positional_encoding and self.use_time_encoding:
-            # Full time-aware encoding: TE(pos + p)
-            # Step 1: Compute smoothed time feature p
-            p = self._compute_time_feature(time_log)  # [B, L]
+        if self.use_time_encoding:
+            out = out + self.time_mlp(time_log.unsqueeze(-1))
 
-            # Step 2: Compute time-aware encoding
-            te = self._time_aware_encoding(seq_len, p)  # [B, L, d_model]
-
-            # Step 3: Add to input embeddings
-            e = e + te
-
-        elif self.use_positional_encoding:
-            # Position only: traditional PE (p=0)
-            # Use precomputed PE for efficiency
-            e = e + self.pe[:, :seq_len, :]
-
-        elif self.use_time_encoding:
-            # Time only: no position index, only time feature
-            p = self._compute_time_feature(time_log)  # [B, L]
-            te = self._time_aware_encoding(seq_len, p)  # [B, L, d_model]
-            e = e + te
-
-        # Note: if both are False, no encoding is added
-
-        return self.dropout(e)
+        return self.dropout(out)
 
 
 class AttentionPooling(nn.Module):
     """
-    Learned attention pooling, replacing simple masked_mean_pool
+    学习性的注意力池化，替代简单的 masked_mean_pool
     """
 
     def __init__(self, d_model):
@@ -256,15 +143,18 @@ class AttentionPooling(nn.Module):
         # h: [B, L, D], mask: [B, L]
         attn_weights = self.attention(h).squeeze(-1)  # [B, L]
 
-        # Set very small weights for padding positions
+        # 对padding位置设置极小权重
         attn_weights = attn_weights.masked_fill(~mask.bool(), -1e9)
         attn_weights = torch.softmax(attn_weights, dim=-1).unsqueeze(-1)  # [B, L, 1]
 
-        # Weighted sum
+        # 加权求和
         z = (h * attn_weights).sum(dim=1)  # [B, D]
         return z
 
-
+# 在 model.py 的 forward 方法中：
+# 替换 z = self.masked_mean_pool(h, mask)
+# 为：
+# z = self.attention_pool(h, mask)
 class FlowFeatureEncoder(nn.Module):
     """
     Encodes flow-level statistical features into d_model space.
@@ -387,7 +277,7 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         flow_feats (optional):
             [B, flow_dim]
-            Only used in 方案C
+            Only used in Mode 2 （方案C）
 
     Output:
         logits:
@@ -405,6 +295,7 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         model_cfg = cfg.get("model", {})
         seq_cfg = cfg.get("sequence", {})
+        # 获取flow_fusion配置
         flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
         self.use_flow_fusion = flow_fusion_cfg.get("enabled", False)
         self.inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
@@ -423,9 +314,6 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         record_projection_cfg = model_cfg.get("record_projection", None)
 
-        # Time encoding alpha (smoothing factor)
-        time_encoding_cfg = model_cfg.get("time_encoding", {})
-        alpha = float(time_encoding_cfg.get("alpha", 1e-07))
         # Record-level projection (always needed)
         self.projection = RecordLevelProjection(
             input_dim=input_dim,
@@ -441,7 +329,6 @@ class Stage1TimeAwareTransformer(nn.Module):
             dropout=dropout,
             use_positional_encoding=use_positional_encoding,
             use_time_encoding=use_time_encoding,
-            alpha=alpha
         )
 
         # Transformer encoder (always needed)
@@ -459,7 +346,7 @@ class Stage1TimeAwareTransformer(nn.Module):
         # Attention pooling (always needed)
         self.attention_pool = AttentionPooling(d_model)
 
-        # 如果是分层注入模式(方案C)，初始化FlowFeatureEncoder和FlowFusion  Hierarchical fusion mode (方案C)
+        # 如果是分层注入模式(方案C)，初始化FlowFeatureEncoder和FlowFusion
         if self.use_flow_fusion and not self.inject_to_packets:
             flow_feature_dim = cfg.get("_flow_feature_dim", 0)
             if flow_feature_dim > 0:
@@ -489,17 +376,8 @@ class Stage1TimeAwareTransformer(nn.Module):
             print(f"[INFO] 方案B - 仅使用Packet特征")
             print(f"[INFO]   输入维度: {input_dim}")
 
-        # Print encoding mode
-        if use_positional_encoding and use_time_encoding:
-            print(f"[INFO] Encoding: Time-Aware (TE(pos+p) from paper)")
-        elif use_positional_encoding:
-            print(f"[INFO] Encoding: Positional Encoding only")
-        elif use_time_encoding:
-            print(f"[INFO] Encoding: Time Encoding only (no position index)")
-        else:
-            print(f"[INFO] Encoding: None")
-
         # ---- Classifier ----
+        # For extremely imbalanced data, use simpler classifier with high dropout
         if dropout > 0.25:
             self.classifier = nn.Sequential(
                 nn.LayerNorm(d_model),
