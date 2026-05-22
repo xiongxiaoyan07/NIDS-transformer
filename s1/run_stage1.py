@@ -100,7 +100,7 @@ def main():
 
     # 重建真实的标签列表（用于计算类别权重）
     train_dataset = loaders["train"].dataset
-    train_labels = train_dataset.labels.numpy().tolist()
+    train_labels = train_dataset.labels.tolist()
 
     # 验证分布
     unique, counts = np.unique(train_labels, return_counts=True)

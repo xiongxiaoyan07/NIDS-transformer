@@ -23,7 +23,27 @@ from .preprocessing import Stage1Preprocessor
 from .splits import stratified_train_val_test_split, train_val_split_for_external_test
 from .utils import safe_mkdir, save_json
 from torch.utils.data import WeightedRandomSampler
+from torch.utils.data.dataloader import default_collate
 
+
+def custom_collate_fn(batch):
+    """
+    自定义 collate 函数，处理可能为 None 的字段
+    保持 flow_feats 的 None 语义
+    """
+    # 检查 batch 中 flow_feats 是否都是 None
+    has_flow_feats = any(item.get('flow_feats') is not None for item in batch)
+
+    if has_flow_feats:
+        # 如果有 flow_feats，正常处理
+        return default_collate(batch)
+    else:
+        # 如果没有 flow_feats，移除这个字段后再 collate
+        batch_without_flow = []
+        for item in batch:
+            item_copy = {k: v for k, v in item.items() if k != 'flow_feats'}
+            batch_without_flow.append(item_copy)
+        return default_collate(batch_without_flow)
 
 def build_dataloaders(
     packet_csv: str,
@@ -190,7 +210,7 @@ def build_dataloaders(
 
     # 在创建train loader前添加
     train_dataset = datasets["train"]
-    train_labels = train_dataset.labels.numpy()
+    train_labels = train_dataset.labels
 
     # 计算样本权重
     class_counts = np.bincount(train_labels, minlength=2)
@@ -210,6 +230,7 @@ def build_dataloaders(
             batch_size=batch_size,
             sampler=sampler,  # 使用sampler而不是shuffle
             num_workers=num_workers,
+            collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
         "val": DataLoader(
@@ -217,6 +238,7 @@ def build_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
         "test": DataLoader(
@@ -224,6 +246,7 @@ def build_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
     }

@@ -245,6 +245,7 @@ def generate_and_save_stage1_tensors(
 
     if flow_feats_tensor is not None:
         save_dict['flow_feats'] = flow_feats_tensor
+        print(f"[INFO] **************** stage1 flow_feats tensors")
 
     np.savez_compressed(save_path, **save_dict)
     print(f"[INFO] saved precomputed stage1 tensors: {save_path}")
