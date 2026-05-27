@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import warnings
+import optuna
 
 from torch import nn
 
@@ -243,6 +244,184 @@ def train_model(
         "test_metrics": test_metrics,
     }
 
+def train_model_for_optuna(
+    model: torch.nn.Module,
+    loaders: Dict[str, Any],
+    cfg: Dict[str, Any],
+    out_dir: str,
+    device: torch.device,
+    train_labels,
+    trial=None,
+    save_best: bool = False,
+) -> Dict[str, Any]:
+    """
+    Optuna 专用训练函数。
+
+    与 train_model() 的区别：
+    1. 只使用 train / val。
+    2. 不评估 test，避免 HPO 阶段污染 test set。
+    3. 不做 threshold_search，不画图，减少 trial 开销。
+    4. 支持 Optuna pruning。
+    5. 返回 best_score / best_epoch / history / best_val_metrics。
+    """
+    print("\n[TRAIN] Training model... train_model_for_optuna")
+    os.makedirs(out_dir, exist_ok=True)
+
+    train_cfg = cfg.get("training", {})
+    seq_cfg = cfg.get("sequence", {})
+
+    epochs = int(train_cfg.get("epochs", 80))
+    lr = float(train_cfg.get("lr", 1e-4))
+    weight_decay = float(train_cfg.get("weight_decay", 1e-4))
+    gamma = float(train_cfg.get("focal_gamma", 2.0))
+    patience = int(train_cfg.get("early_stop_patience", 10))
+    monitor = str(train_cfg.get("monitor_metric", "f1_label1"))
+    monitor_mode = str(train_cfg.get("monitor_mode", "max")).lower()
+    label_smoothing = float(train_cfg.get("label_smoothing", 0.05))
+
+    max_seq_len = int(seq_cfg.get("max_seq_len", 64))
+    strategy = seq_cfg.get("strategy", "head")
+
+    # 类别权重：沿用你原来的不平衡处理
+    alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+
+    criterion = FocalLossWithLabelSmoothing(
+        alpha=alpha,
+        gamma=gamma,
+        label_smoothing=label_smoothing,
+    )
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=lr,
+        weight_decay=weight_decay,
+    )
+
+    # 你的原代码 warmup_epochs = min(10, epochs // 10)。
+    # 这里加 max(1, ...) 防止 epochs 较小时 warmup_epochs=0。
+    warmup_epochs = max(1, min(10, epochs // 10))
+    cosine_epochs = max(1, epochs - warmup_epochs)
+
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_epochs,
+    )
+
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_epochs,
+        eta_min=lr * 0.01,
+    )
+
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
+    )
+
+    if monitor_mode == "min":
+        best_score = float("inf")
+        is_better = lambda score, best: score < best
+    else:
+        best_score = -float("inf")
+        is_better = lambda score, best: score > best
+
+    best_epoch = 0
+    best_val_metrics = None
+    epochs_without_improvement = 0
+    history = []
+
+    best_path = os.path.join(
+        out_dir,
+        f"trial_best_seqLen{max_seq_len}_{strategy}.pt",
+    )
+
+    for epoch in range(1, epochs + 1):
+        train_loss = _train_one_epoch(
+            model=model,
+            loader=loaders["train"],
+            optimizer=optimizer,
+            criterion=criterion,
+            device=device,
+        )
+
+        scheduler.step()
+
+        val_metrics = evaluate_model(
+            model=model,
+            loader=loaders["val"],
+            criterion=criterion,
+            device=device,
+        )
+
+        score = float(val_metrics.get(monitor, val_metrics.get("macro_f1", 0.0)))
+
+        row = {
+            "epoch": epoch,
+            "train_loss": float(train_loss),
+            **{f"val_{k}": v for k, v in val_metrics.items()},
+            "monitor": monitor,
+            "score": score,
+        }
+        history.append(row)
+
+        print(
+            f"[Optuna Epoch {epoch:03d}] "
+            f"train_loss={train_loss:.6f} "
+            f"val_loss={val_metrics['loss']:.6f} "
+            f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+            f"val_weighted_f1={val_metrics['weighted_f1']:.4f} "
+            f"val_f1_label1={val_metrics.get('f1_label1', 0.0):.4f} "
+            f"val_auc={val_metrics.get('auc', 0.0):.4f}"
+        )
+
+        # Optuna pruning：把每个 epoch 的验证分数汇报给 trial
+        if trial is not None:
+            trial.report(score, step=epoch)
+
+            if trial.should_prune():
+                raise optuna.TrialPruned(
+                    f"Pruned at epoch={epoch}, {monitor}={score:.6f}"
+                )
+
+        if is_better(score, best_score):
+            best_score = score
+            best_epoch = epoch
+            best_val_metrics = val_metrics
+            epochs_without_improvement = 0
+
+            if save_best:
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "cfg": cfg,
+                        "best_epoch": best_epoch,
+                        "best_score": best_score,
+                        "best_val_metrics": best_val_metrics,
+                    },
+                    best_path,
+                )
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                print(f"[Optuna] early stopping at epoch {epoch}")
+                break
+
+    result = {
+        "best_score": float(best_score),
+        "best_epoch": int(best_epoch),
+        "best_val_metrics": best_val_metrics,
+        "history": history,
+    }
+
+    if save_best:
+        result["best_model_path"] = best_path
+
+    save_json(result, os.path.join(out_dir, "optuna_trial_summary.json"))
+
+    return result
 
 def _plot_threshold_search(results, out_dir):
     """绘制阈值搜索曲线"""
