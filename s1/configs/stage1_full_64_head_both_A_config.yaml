@@ -12,7 +12,7 @@ data:
 
 sequence:
   max_seq_len: 64
-  # options: head, head_tail, random
+  # options: head head_tail random
   strategy: head
 
 split:
@@ -137,15 +137,15 @@ features:
     # 方案A: [packet_feats; flow_feats_tiled] → 每个packet都包含flow信息
     enabled: true
     inject_to_packets: true   # true=拼接到packet
-    method: "concat"           # 方案A不需要此参数，但保持兼容  concat, add, gated
+    method: "concat"           # 方案A不需要此参数，但保持兼容  concat add gated
     #方案B [packet_feats] → 不使用flow信息
-#    "enabled": False,
-#    "inject_to_packets": False,
-#    "method": "none",
+#    "enabled": False
+#    "inject_to_packets": False
+#    "method": "none"
     #方案C-[packet_feats] + [flow_feats_separate] → 通过融合层注入
-#    "enabled": True,
-#    "inject_to_packets": False,
-#    "method": "gated",
+#    "enabled": True
+#    "inject_to_packets": False
+#    "method": "gated"
 preprocessing:
   numerical:
     scaler: standard     # 可选: standard / robust / none

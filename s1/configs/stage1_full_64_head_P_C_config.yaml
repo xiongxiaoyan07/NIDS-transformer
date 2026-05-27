@@ -1,5 +1,5 @@
-# Stage1 configuration - 优化版（精简Flow特征）
-# 从60+流特征精简到24个核心特征，减少冗余，提升训练效率
+# Stage1 configuration.
+# 你可以通过修改这个文件决定 flow-level 和 packet-level 到底用哪些字段。
 
 seed: 42
 strict_schema: false
@@ -11,9 +11,9 @@ data:
   packet_iat_col: flow_iat_us
 
 sequence:
-  max_seq_len: 100
+  max_seq_len: 64
   # options: head head_tail random
-  strategy: head_tail
+  strategy: head
 
 split:
   train_size: 0.70
@@ -54,56 +54,82 @@ features:
       - tcp_ece
       - tcp_cwr
 
-  # ============================================================
-  # 精选流特征：从60+精简到24个，保留最具区分度的特征
-  # ============================================================
+  # flow-level 字段完全可配置。
+  # 不建议默认使用 source_ip / destination_ip，因为 IP one-hot 维度大且容易产生环境偏差。
   flow:
-    # 分类特征：移除（协议信息已在包级特征中覆盖）
-    # categorical:
-    #   - protocol  # 已在packet中使用
-
-    # ========== 核心流量特征 (8个) ==========
+#    categorical:
+#      - protocol
+#      - has_init_win_bytes_forward
+#      - has_init_win_bytes_backward
     numerical:
-      # 流量基础指标（高信息量）
-      - flow_duration               # 流持续时间：恶意流量时长异常
-      - total_fwd_packets           # 前向包数：请求模式
-      - total_backward_packets      # 后向包数：响应模式
-      - total_length_of_fwd_packets # 前向字节数：上传/扫描
-      - total_length_of_bwd_packets # 后向字节数：下载/数据窃取
-
-      # 流量速率指标（高区分度）
-      - flow_bytes_per_s            # 字节速率：DDoS vs 正常
-      - flow_packets_per_s          # 包速率：流量突发检测
-
-      # 流量对称性（恶意流量关键特征）
-      - down_up_ratio               # 下行/上行比：C&C通常不对称
-
-      # ========== 时间模式特征 (4个) ==========
-      - flow_iat_mean               # 平均包间隔：规律性检测
-      - flow_iat_std                # 包间隔变化：异常模式
-      - fwd_iat_mean                # 前向包间隔：发送模式
-      - bwd_iat_mean                # 后向包间隔：响应模式
-
-      # ========== 包大小统计 (4个) ==========
-      - packet_length_mean          # 平均包长：恶意流量常有特征
-      - packet_length_std           # 包长标准差：探测行为
-      - max_packet_length           # 最大包：大数据传输检测
-      - average_packet_size         # 平均包大小：行为特征
-
-      # ========== TCP标志位统计 (4个) ==========
-      - syn_flag_count              # SYN标志数：扫描/洪水检测（关键）
-      - fin_flag_count              # FIN标志数：连接终止模式
-      - rst_flag_count              # RST标志数：异常连接重置
-      - psh_flag_count              # PSH标志数：数据传输特征
-
-      # ========== 前向段大小 (2个) ==========
-      - avg_fwd_segment_size        # 前向数据段大小：上传行为
-      - avg_bwd_segment_size        # 后向数据段大小：下载行为
-
-      # ========== 初始窗口大小 (2个) ==========
-      - init_win_bytes_forward      # 前向初始窗口：TCP行为特征
-      - init_win_bytes_backward     # 后向初始窗口：协议行为
-
+#      - source_port
+#      - destination_port
+      - flow_duration
+      - total_fwd_packets
+      - total_backward_packets
+      - total_length_of_fwd_packets
+      - total_length_of_bwd_packets
+      - fwd_packet_length_max
+      - fwd_packet_length_min
+      - fwd_packet_length_mean
+      - fwd_packet_length_std
+      - bwd_packet_length_max
+      - bwd_packet_length_min
+      - bwd_packet_length_mean
+      - bwd_packet_length_std
+      - flow_bytes_per_s
+      - flow_packets_per_s
+      - flow_iat_mean
+      - flow_iat_std
+      - flow_iat_max
+      - flow_iat_min
+      - fwd_iat_total
+      - fwd_iat_mean
+      - fwd_iat_std
+      - fwd_iat_max
+      - fwd_iat_min
+      - bwd_iat_total
+      - bwd_iat_mean
+      - bwd_iat_std
+      - bwd_iat_max
+      - bwd_iat_min
+      - fwd_psh_flags
+      - bwd_psh_flags
+      - fwd_urg_flags
+      - bwd_urg_flags
+      - fwd_header_length
+      - bwd_header_length
+      - fwd_packets_per_s
+      - bwd_packets_per_s
+      - min_packet_length
+      - max_packet_length
+      - packet_length_mean
+      - packet_length_std
+      - packet_length_variance
+      - fin_flag_count
+      - syn_flag_count
+      - rst_flag_count
+      - psh_flag_count
+      - ack_flag_count
+      - urg_flag_count
+      - cwe_flag_count
+      - ece_flag_count
+      - down_up_ratio
+      - average_packet_size
+      - avg_fwd_segment_size
+      - avg_bwd_segment_size
+      - init_win_bytes_forward
+      - init_win_bytes_backward
+      - act_data_pkt_fwd
+      - min_seg_size_forward
+      - active_mean
+      - active_std
+      - active_max
+      - active_min
+      - idle_mean
+      - idle_std
+      - idle_max
+      - idle_min
     binary:
       - has_init_win_bytes_forward
       - has_init_win_bytes_backward
@@ -133,7 +159,6 @@ preprocessing:
       upper_quantile: 0.999
 
     log1p:
-      # 包级特征：保留原有配置
       packet:
         - pkt_len
         - ip_len
@@ -143,39 +168,60 @@ preprocessing:
         - tcp_header_len
         - udp_len
 
-      # 流级特征：精简后的log1p配置
       flow:
-        # 核心流量特征
         - flow_duration
         - total_fwd_packets
         - total_backward_packets
         - total_length_of_fwd_packets
         - total_length_of_bwd_packets
+        - fwd_packet_length_max
+        - fwd_packet_length_min
+        - fwd_packet_length_mean
+        - fwd_packet_length_std
+        - bwd_packet_length_max
+        - bwd_packet_length_min
+        - bwd_packet_length_mean
+        - bwd_packet_length_std
         - flow_bytes_per_s
         - flow_packets_per_s
-        - down_up_ratio
-
-        # 时间模式特征
         - flow_iat_mean
         - flow_iat_std
+        - flow_iat_max
+        - flow_iat_min
+        - fwd_iat_total
         - fwd_iat_mean
+        - fwd_iat_std
+        - fwd_iat_max
+        - fwd_iat_min
+        - bwd_iat_total
         - bwd_iat_mean
-
-        # 包大小统计
+        - bwd_iat_std
+        - bwd_iat_max
+        - bwd_iat_min
+        - fwd_header_length
+        - bwd_header_length
+        - fwd_packets_per_s
+        - bwd_packets_per_s
+        - min_packet_length
+        - max_packet_length
         - packet_length_mean
         - packet_length_std
-        - max_packet_length
+        - packet_length_variance
         - average_packet_size
-
-        # 段大小
         - avg_fwd_segment_size
         - avg_bwd_segment_size
-
-        # 初始窗口
         - init_win_bytes_forward
         - init_win_bytes_backward
+        - act_data_pkt_fwd
+        - active_mean
+        - active_std
+        - active_max
+        - active_min
+        - idle_mean
+        - idle_std
+        - idle_max
+        - idle_min
 
-        # 标志位不进行log1p（因为这些是计数，不是重尾分布）
 model:
   d_model: 128          # 回退到128（数据量不足以支撑256）
   nhead: 8
@@ -183,7 +229,7 @@ model:
   dim_feedforward: 512  # 回退到512
   dropout: 0.3          # 增加dropout防止过拟合
   use_positional_encoding: true
-  use_time_encoding: true
+  use_time_encoding: false
   # 新增：时间编码配置
   time_encoding:
     alpha: 1.0e-07  # 平滑因子（论文默认值

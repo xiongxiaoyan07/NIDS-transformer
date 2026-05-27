@@ -176,6 +176,18 @@ class TimeAwareEncoding(nn.Module):
 
         return te
 
+    def _time_only_encoding(self, seq_len: int, p: torch.Tensor) -> torch.Tensor:
+        batch_size = p.size(0)
+        device = p.device
+
+        combined = p.unsqueeze(-1)  # [B, L, 1]
+        arg = combined * self.div_term
+
+        te = torch.zeros(batch_size, seq_len, self.d_model, device=device)
+        te[:, :, 0::2] = torch.sin(arg)
+        te[:, :, 1::2] = torch.cos(arg)
+        return te
+
     def forward(self, e: torch.Tensor, time_log: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -215,8 +227,8 @@ class TimeAwareEncoding(nn.Module):
 
         elif self.use_time_encoding:
             # Time only: no position index, only time feature
-            p = self._compute_time_feature(time_log)  # [B, L]
-            te = self._time_aware_encoding(seq_len, p)  # [B, L, d_model]
+            p = self._compute_time_feature(time_log)
+            te = self._time_only_encoding(seq_len, p)
             e = e + te
 
         # Note: if both are False, no encoding is added
