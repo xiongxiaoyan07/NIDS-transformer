@@ -157,10 +157,6 @@ def generate_and_save_stage1_tensors(
     label_col = cfg["data"]["label_col"]
     packet_time_col = cfg["data"]["packet_time_col"]
 
-    flow_time_col = cfg["data"].get("flow_time_col", "flow_start_timestamp_us")
-    source_id_col = cfg["data"].get("source_id_col", "source_id")
-    destination_id_col = cfg["data"].get("destination_id_col", "destination_id")
-
     # 读取 flow 融合配置
     flow_fusion_cfg = cfg.get("features", {}).get("flow_fusion", {})
     inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
@@ -259,36 +255,6 @@ def generate_and_save_stage1_tensors(
         time_tensor[row_idx, :real_len] = time_log_all[idxs]
         mask_tensor[row_idx, :real_len] = True
 
-    # ===== Stage2 metadata: keep raw flow-level identifiers =====
-    # These fields are NOT used as Stage1 model input.
-    # They are saved only for Stage2 inter-flow context construction.
-    stage2_meta = {}
-
-    if flow_time_col in flows_sub.columns:
-        stage2_meta["flow_start_timestamp_us"] = pd.to_numeric(
-            flows_sub[flow_time_col],
-            errors="coerce",
-        ).fillna(0).astype("int64").to_numpy()
-    else:
-        raise ValueError(
-            f"Missing required Stage2 time column: {flow_time_col}. "
-            "Stage2 needs flow_start_timestamp_us for chronological windows."
-        )
-
-    if source_id_col in flows_sub.columns:
-        stage2_meta["source_id"] = flows_sub[source_id_col].astype(str).to_numpy()
-    else:
-        raise ValueError(
-            f"Missing required Stage2 source column: {source_id_col}."
-        )
-
-    if destination_id_col in flows_sub.columns:
-        stage2_meta["destination_id"] = flows_sub[destination_id_col].astype(str).to_numpy()
-    else:
-        raise ValueError(
-            f"Missing required Stage2 destination column: {destination_id_col}."
-        )
-
     save_path = os.path.join(
         out_dir,
         f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz"
@@ -300,10 +266,6 @@ def generate_and_save_stage1_tensors(
         "mask": mask_tensor,
         "labels": labels,
         "flow_ids": flow_id_tensor,
-        # Stage2 metadata
-        "flow_start_timestamp_us": stage2_meta["flow_start_timestamp_us"],
-        "source_id": stage2_meta["source_id"],
-        "destination_id": stage2_meta["destination_id"],
     }
 
     if flow_feats_tensor is not None:

@@ -20,12 +20,7 @@ from torch.utils.data import DataLoader
 from .data_io import read_stage1_csvs, get_or_generate_stage1_tensors
 from .dataset import PrecomputedFlowDataset
 from .preprocessing import Stage1Preprocessor
-from .splits import (
-    stratified_train_val_test_split,
-    train_val_split_for_external_test,
-    chronological_train_val_test_split,
-    chronological_train_val_split_for_external_test,
-)
+from .splits import stratified_train_val_test_split, train_val_split_for_external_test
 from .utils import safe_mkdir, save_json
 from torch.utils.data import WeightedRandomSampler
 from torch.utils.data.dataloader import default_collate
@@ -87,10 +82,6 @@ def build_dataloaders(
     strategy = seq_cfg.get("strategy", "head")
     seed = int(cfg.get("seed", 42))
 
-    split_method = split_cfg.get("method", "stratified")
-    time_col = data_cfg.get("flow_time_col", "flow_start_timestamp_us")
-    print("[INFO] pipeline.py ------ build_dataloaders --- split_method", split_method)
-
     packets, flows = read_stage1_csvs(
         packet_csv=packet_csv,
         flow_csv=flow_csv,
@@ -113,28 +104,15 @@ def build_dataloaders(
             packet_time_col=packet_time_col,
         )
 
-        if split_method == "chronological":
-            splits = chronological_train_val_split_for_external_test(
-                flows=flows,
-                flow_id_col=flow_id_col,
-                label_col=label_col,
-                time_col=time_col,
-                train_size=float(split_cfg.get("train_size", 0.70)),
-                val_size=float(split_cfg.get("val_size", 0.10)),
-                seed=seed,
-                stratify=bool(split_cfg.get("stratify", True)),
-                boundary_tolerance=float(split_cfg.get("boundary_tolerance", 0.05)),
-            )
-        else:
-            splits = train_val_split_for_external_test(
-                flows=flows,
-                flow_id_col=flow_id_col,
-                label_col=label_col,
-                train_size=float(split_cfg.get("train_size", 0.70)),
-                val_size=float(split_cfg.get("val_size", 0.10)),
-                seed=seed,
-                stratify=bool(split_cfg.get("stratify", True)),
-            )
+        splits = train_val_split_for_external_test(
+            flows=flows,
+            flow_id_col=flow_id_col,
+            label_col=label_col,
+            train_size=float(split_cfg.get("train_size", 0.70)),
+            val_size=float(split_cfg.get("val_size", 0.10)),
+            seed=seed,
+            stratify=bool(split_cfg.get("stratify", True)),
+        )
 
         splits["test"] = [
             int(x) for x in test_flows[flow_id_col].drop_duplicates().tolist()
@@ -142,30 +120,16 @@ def build_dataloaders(
     else:
         test_packets, test_flows = packets, flows
 
-        if split_method == "chronological":
-            splits = chronological_train_val_test_split(
-                flows=flows,
-                flow_id_col=flow_id_col,
-                label_col=label_col,
-                time_col=time_col,
-                train_size=float(split_cfg.get("train_size", 0.70)),
-                val_size=float(split_cfg.get("val_size", 0.10)),
-                test_size=float(split_cfg.get("test_size", 0.20)),
-                seed=seed,
-                stratify=bool(split_cfg.get("stratify", True)),
-                boundary_tolerance=float(split_cfg.get("boundary_tolerance", 0.05)),
-            )
-        else:
-            splits = stratified_train_val_test_split(
-                flows=flows,
-                flow_id_col=flow_id_col,
-                label_col=label_col,
-                train_size=float(split_cfg.get("train_size", 0.70)),
-                val_size=float(split_cfg.get("val_size", 0.10)),
-                test_size=float(split_cfg.get("test_size", 0.20)),
-                seed=seed,
-                stratify=bool(split_cfg.get("stratify", True)),
-            )
+        splits = stratified_train_val_test_split(
+            flows=flows,
+            flow_id_col=flow_id_col,
+            label_col=label_col,
+            train_size=float(split_cfg.get("train_size", 0.70)),
+            val_size=float(split_cfg.get("val_size", 0.10)),
+            test_size=float(split_cfg.get("test_size", 0.20)),
+            seed=seed,
+            stratify=bool(split_cfg.get("stratify", True)),
+        )
 
     train_ids = set(splits["train"])
     val_ids = set(splits["val"])

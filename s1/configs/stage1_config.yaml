@@ -9,17 +9,24 @@ data:
   label_col: label
   packet_time_col: timestamp_us
   packet_iat_col: flow_iat_us
+  flow_time_col: flow_start_timestamp_us
+  # Stage2 context metadata columns
+  source_id_col: source_ip
+  destination_id_col: destination_ip
 
 sequence:
-  max_seq_len: 40
+  max_seq_len: 64
   # options: head head_tail random
   strategy: head
 
 split:
+  # chronological / stratified
+  method: chronological
   train_size: 0.70
   val_size: 0.10
   test_size: 0.20
   stratify: true
+  boundary_tolerance: 0.05
 
 features:
   # 绝对时间字段一般不推荐作为模型输入，避免数据泄漏。
@@ -135,17 +142,17 @@ features:
 
   flow_fusion:
     # 方案A: [packet_feats; flow_feats_tiled] → 每个packet都包含flow信息
-    enabled: true
-    inject_to_packets: true   # true=拼接到packet
-    method: "concat"           # 方案A不需要此参数，但保持兼容  concat add gated
+#    enabled: true
+#    inject_to_packets: true   # true=拼接到packet
+#    method: "concat"           # 方案A不需要此参数，但保持兼容  concat add gated
     #方案B [packet_feats] → 不使用flow信息
-#    "enabled": False
-#    "inject_to_packets": False
+#    "enabled": false
+#    "inject_to_packets": false
 #    "method": "none"
     #方案C-[packet_feats] + [flow_feats_separate] → 通过融合层注入
-#    "enabled": True
-#    "inject_to_packets": False
-#    "method": "gated"
+    "enabled": true
+    "inject_to_packets": false
+    "method": "gated"
 
 preprocessing:
   numerical:

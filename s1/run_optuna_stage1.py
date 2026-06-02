@@ -1,37 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-Optuna hyperparameter search for Stage1TimeAwareTransformer.
-
-用法示例：
-
-python run_optuna_stage1.py \
-  --packet_csv /home/xxiong/pcaps/stage1_packets.csv \
-  --flow_csv /home/xxiong/pcaps/stage1_flows.csv \
-  --config configs/stage1_full_64_head_both_C_config.yaml \
-  --out_dir ./stage1_optuna \
-  --n_trials 50 \
-  --timeout 0
-
-如果有外部最终测试集：
-
-python run_optuna_stage1.py \
-  --packet_csv ./train_stage1_packets.csv \
-  --flow_csv ./train_stage1_flows.csv \
-  --external_packet_csv ./final_test_packets.csv \
-  --external_flow_csv ./final_test_flows.csv \
-  --config configs/stage1_full_64_head_both_C_config.yaml \
-  --out_dir ./stage1_optuna_external \
-  --n_trials 50
-"""
-
 from __future__ import annotations
 
 import argparse
 import copy
 import gc
-import json
 import os
 from typing import Any, Dict
 
@@ -69,6 +43,12 @@ def parse_args():
     parser.add_argument("--storage", default=None)
     parser.add_argument("--study_name", default="stage1_transformer_hpo")
 
+    # 新增：HPO 加速相关参数
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--save_trial_config", action="store_true")
+    parser.add_argument("--empty_cache_every", type=int, default=10)
+
     return parser.parse_args()
 
 
@@ -93,20 +73,41 @@ def infer_input_dim(cfg: Dict[str, Any], preprocessor) -> int:
     return preprocessor.packet_feature_dim()
 
 
-def make_trial_loaders(base_loaders, batch_size: int, num_workers: int = 0):
-    """
-    只重建 DataLoader，不重复读 CSV / fit preprocessor / 生成 npz。
-    这样可以搜索 batch_size，同时复用 build_dataloaders() 已经生成的数据集。
-    """
+def prepare_cached_sampler_weights(train_dataset):
+    labels = np.asarray(train_dataset.labels)
+    class_counts = np.bincount(labels, minlength=2)
+    class_counts = np.maximum(class_counts, 1)
+
+    class_weights = 1.0 / class_counts
+    sample_weights = class_weights[labels]
+
+    # WeightedRandomSampler 可以接受 Tensor，避免每个 trial 重算
+    return torch.as_tensor(sample_weights, dtype=torch.double)
+
+
+def make_loader_kwargs(num_workers: int):
+    kwargs = {
+        "num_workers": num_workers,
+        "collate_fn": custom_collate_fn,
+        "pin_memory": torch.cuda.is_available(),
+    }
+
+    if num_workers > 0:
+        kwargs["persistent_workers"] = True
+        kwargs["prefetch_factor"] = 2
+
+    return kwargs
+
+
+def make_trial_loaders(
+    base_loaders,
+    batch_size: int,
+    sample_weights: torch.Tensor,
+    num_workers: int = 4,
+):
     train_dataset = base_loaders["train"].dataset
     val_dataset = base_loaders["val"].dataset
     test_dataset = base_loaders["test"].dataset
-
-    train_labels = train_dataset.labels
-    class_counts = np.bincount(train_labels, minlength=2)
-    class_counts = np.maximum(class_counts, 1)
-    class_weights = 1.0 / class_counts
-    sample_weights = class_weights[train_labels]
 
     sampler = WeightedRandomSampler(
         weights=sample_weights,
@@ -114,34 +115,28 @@ def make_trial_loaders(base_loaders, batch_size: int, num_workers: int = 0):
         replacement=True,
     )
 
-    loaders = {
+    common_kwargs = make_loader_kwargs(num_workers)
+
+    return {
         "train": DataLoader(
             train_dataset,
             batch_size=batch_size,
             sampler=sampler,
-            num_workers=num_workers,
-            collate_fn=custom_collate_fn,
-            pin_memory=True,
+            **common_kwargs,
         ),
         "val": DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            collate_fn=custom_collate_fn,
-            pin_memory=True,
+            **common_kwargs,
         ),
         "test": DataLoader(
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=num_workers,
-            collate_fn=custom_collate_fn,
-            pin_memory=True,
+            **common_kwargs,
         ),
     }
-
-    return loaders
 
 
 def suggest_hparams(trial: optuna.Trial, cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -178,9 +173,6 @@ def suggest_hparams(trial: optuna.Trial, cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     dropout = trial.suggest_float("dropout", 0.10, 0.45)
 
-    # 你的 flow fusion 当前是方案C gated；这里可搜索 gated / concat / add
-    fusion_method = "gated" #trial.suggest_categorical("fusion_method", ["gated", "concat", "add"])
-
     trial_cfg.setdefault("model", {})
     trial_cfg["model"]["d_model"] = d_model
     trial_cfg["model"]["nhead"] = nhead
@@ -190,14 +182,12 @@ def suggest_hparams(trial: optuna.Trial, cfg: Dict[str, Any]) -> Dict[str, Any]:
 
     trial_cfg.setdefault("features", {})
     trial_cfg["features"].setdefault("flow_fusion", {})
-    trial_cfg["features"]["flow_fusion"]["method"] = fusion_method
+    trial_cfg["features"]["flow_fusion"]["method"] = "gated"
 
     trial_cfg.setdefault("training", {})
-
-    # HPO 阶段不要跑 1000 epoch。先用 60~120，并依赖 early stopping。
-    trial_cfg["training"]["epochs"] = trial.suggest_int("epochs", 50, 140)
+    trial_cfg["training"]["epochs"] = trial.suggest_int("epochs", 40, 100)
     trial_cfg["training"]["early_stop_patience"] = trial.suggest_int(
-        "early_stop_patience", 8, 25
+        "early_stop_patience", 6, 18
     )
 
     trial_cfg["training"]["batch_size"] = trial.suggest_categorical(
@@ -238,6 +228,9 @@ def main():
     base_cfg["seed"] = int(args.seed)
     set_seed(int(args.seed))
 
+    # 加速 cuDNN
+    torch.backends.cudnn.benchmark = True
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[INFO] device={device}")
 
@@ -270,6 +263,9 @@ def main():
 
     save_json(metadata, os.path.join(args.out_dir, "base_metadata.json"))
 
+    # 关键优化：只算一次 sample_weights
+    sample_weights = prepare_cached_sampler_weights(base_loaders["train"].dataset)
+
     def objective(trial: optuna.Trial) -> float:
         trial_cfg = suggest_hparams(trial, base_cfg)
 
@@ -277,21 +273,35 @@ def main():
         # 由于 trial_cfg 是 deepcopy，需要同步 flow_feature_dim。
         _ = infer_input_dim(trial_cfg, preprocessor)
 
+        trial_cfg.setdefault("training", {})
+        trial_cfg["training"]["num_workers"] = int(args.num_workers)
+        trial_cfg["training"]["amp"] = bool(args.amp)
+
         batch_size = int(trial_cfg["training"]["batch_size"])
-        num_workers = int(trial_cfg["training"].get("num_workers", 0))
 
         loaders = make_trial_loaders(
             base_loaders=base_loaders,
             batch_size=batch_size,
-            num_workers=num_workers,
+            sample_weights=sample_weights,
+            num_workers=int(args.num_workers),
         )
 
         trial_out_dir = os.path.join(args.out_dir, f"trial_{trial.number:04d}")
         safe_mkdir(trial_out_dir)
 
-        # 保存 trial 配置，方便复现实验
-        with open(os.path.join(trial_out_dir, "trial_config.yaml"), "w", encoding="utf-8") as f:
-            yaml.safe_dump(trial_cfg, f, allow_unicode=True, sort_keys=False)
+        # 默认不写每个 trial config，减少 I/O
+        if args.save_trial_config:
+            with open(
+                os.path.join(trial_out_dir, "trial_config.yaml"),
+                "w",
+                encoding="utf-8",
+            ) as f:
+                yaml.safe_dump(
+                    trial_cfg,
+                    f,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
 
         set_seed(int(args.seed) + trial.number)
 
@@ -321,19 +331,27 @@ def main():
 
         finally:
             del model
+            del loaders
             gc.collect()
-            if torch.cuda.is_available():
+
+            # 不要每个 trial 都 empty_cache，否则会拖慢
+            if (
+                torch.cuda.is_available()
+                and args.empty_cache_every > 0
+                and (trial.number + 1) % args.empty_cache_every == 0
+            ):
                 torch.cuda.empty_cache()
 
     sampler = optuna.samplers.TPESampler(
         seed=int(args.seed),
         multivariate=True,
         group=True,
+        n_startup_trials=8,
     )
 
     pruner = optuna.pruners.MedianPruner(
         n_startup_trials=8,
-        n_warmup_steps=5,
+        n_warmup_steps=3,
         interval_steps=1,
     )
 
@@ -356,7 +374,7 @@ def main():
         objective,
         n_trials=int(args.n_trials),
         timeout=timeout,
-        gc_after_trial=True,
+        gc_after_trial=False,
     )
 
     print("\n" + "=" * 80)

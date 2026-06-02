@@ -31,7 +31,6 @@ import argparse
 import os
 
 import numpy as np
-import pandas as pd
 import torch
 
 from stage1.config import load_config
@@ -62,64 +61,6 @@ def count_parameters(model):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total_params, trainable_params
-
-def build_stage2_metadata_from_npz(
-    npz_path: str,
-    split_name: str,
-) -> pd.DataFrame:
-    data = np.load(npz_path, allow_pickle=True)
-
-    required_keys = ["flow_id", "label"]
-    missing = [k for k in required_keys if k not in data]
-
-    if missing:
-        raise KeyError(f"{npz_path} missing required keys: {missing}")
-
-    n = len(data["flow_id"])
-
-    if len(data["label"]) != n:
-        raise ValueError(
-            f"{npz_path}: flow_id length={n}, "
-            f"label length={len(data['label'])}"
-        )
-
-    meta = {
-        "flow_id": data["flow_id"].astype(np.int64),
-        "label": data["label"].astype(np.int64),
-    }
-
-    if "split" in data:
-        if len(data["split"]) != n:
-            raise ValueError(
-                f"{npz_path}: split length={len(data['split'])}, "
-                f"flow_id length={n}"
-            )
-        meta["split"] = data["split"].astype(str)
-    else:
-        meta["split"] = np.full(n, split_name, dtype=object)
-
-    optional_cols = [
-        "flow_start_timestamp_us",
-        "source_id",
-        "destination_id",
-    ]
-
-    for col in optional_cols:
-        if col not in data:
-            continue
-
-        if len(data[col]) != n:
-            raise ValueError(
-                f"{npz_path}: {col} length={len(data[col])}, "
-                f"flow_id length={n}"
-            )
-
-        if col == "flow_start_timestamp_us":
-            meta[col] = data[col].astype(np.int64)
-        else:
-            meta[col] = data[col].astype(str)
-
-    return pd.DataFrame(meta)
 
 def main():
     args = parse_args()
@@ -233,46 +174,18 @@ def main():
 
     save_json(run_summary, os.path.join(args.out_dir, "stage1_run_summary.json"))
 
-    print("\n" + "=" * 60)
-    print("[STEP 4] Exporting embeddings...args", args)
-    print("=" * 60)
     if args.export_embeddings:
-        meta_dfs = []
-
+        # Export embeddings for all three splits.
         for split_name in ["train", "val", "test"]:
-            out_path = os.path.join(
-                args.out_dir,
-                f"stage1_{split_name}_embeddings.npz",
-            )
-
+            out_path = os.path.join(args.out_dir, f"stage1_{split_name}_embeddings.npz")
             export_embeddings(
                 model=model,
                 loader=loaders[split_name],
                 device=device,
                 output_npz_path=out_path,
-                split_name=split_name,
             )
-
             print(f"[INFO] saved embeddings: {out_path}")
 
-            split_meta_df = build_stage2_metadata_from_npz(
-                npz_path=out_path,
-                split_name=split_name,
-            )
-            meta_dfs.append(split_meta_df)
-
-        meta_df = pd.concat(meta_dfs, axis=0, ignore_index=True)
-
-        if "flow_start_timestamp_us" in meta_df.columns:
-            meta_df = meta_df.sort_values(
-                ["flow_start_timestamp_us", "flow_id"],
-                kind="mergesort",
-            ).reset_index(drop=True)
-
-        meta_path = os.path.join(args.out_dir, "stage1_flow_metadata.csv")
-        meta_df.to_csv(meta_path, index=False)
-
-        print(f"[INFO] saved Stage2 flow metadata: {meta_path}")
 
 if __name__ == "__main__":
     main()
