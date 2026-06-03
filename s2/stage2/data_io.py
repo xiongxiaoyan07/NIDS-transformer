@@ -39,6 +39,15 @@ def load_stage1_outputs(stage1_dir: str, cfg: Dict[str, Any]) -> Tuple[pd.DataFr
             if key not in data:
                 raise KeyError(f"{path} missing required key: {key}")
 
+        # 检查重复
+        unique_ids, counts = np.unique(data["flow_id"], return_counts=True)
+        dup_ids = unique_ids[counts > 1]
+        print("[INFO] Stage1 split: ", split)
+        if len(dup_ids) > 0:
+            total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
+            examples = dup_ids[:10].tolist()
+            print(f"Duplicated flow_id in {split}. Total duplicated: {total} Examples: {examples}")
+
         n = len(data["flow_id"])
         z = data["z"].astype(np.float32)
         if z.shape[0] != n:
@@ -71,6 +80,12 @@ def load_stage1_outputs(stage1_dir: str, cfg: Dict[str, Any]) -> Tuple[pd.DataFr
 
     meta_df = pd.concat(dfs, axis=0).reset_index(drop=True)
     z_all = np.concatenate(zs, axis=0).astype(np.float32)
+
+    if meta_df["flow_id"].duplicated().any():
+        dup_mask = meta_df["flow_id"].duplicated()
+        examples = meta_df.loc[dup_mask, "flow_id"].head(10).tolist()
+        total = int(dup_mask.sum())
+        print(f"Duplicated flow_id in Stage1 outputs. Total duplicated: {total} Examples: {examples}")
 
     meta_df = _merge_optional_metadata_csv(meta_df, stage1_dir, cfg)
     _validate_metadata(meta_df, cfg)

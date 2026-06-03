@@ -67,6 +67,7 @@ def build_stage2_metadata_from_npz(
     npz_path: str,
     split_name: str,
 ) -> pd.DataFrame:
+    print("[INFO] Stage1 build_stage2_metadata_from_npz  npz_path: ", npz_path)
     data = np.load(npz_path, allow_pickle=True)
 
     required_keys = ["flow_id", "label"]
@@ -74,6 +75,16 @@ def build_stage2_metadata_from_npz(
 
     if missing:
         raise KeyError(f"{npz_path} missing required keys: {missing}")
+
+    # # 检查重复
+    # unique_ids, counts = np.unique(data["flow_id"], return_counts=True)
+    # dup_ids = unique_ids[counts > 1]
+    # print("[INFO] Stage1 build_stage2_metadata_from_npz: ", split_name)
+    # # train: 这里也有重复的15547-----修改之后这里就不存在重复的flow_id了
+    # if len(dup_ids) > 0:
+    #     total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
+    #     examples = dup_ids[:10].tolist()
+    #     print(f"[INFO] Stage1 build_stage2_metadata_from_npz--------------Duplicated flow_id in {split_name}. Total duplicated: {total} Examples: {examples}")
 
     n = len(data["flow_id"])
 
@@ -244,14 +255,22 @@ def main():
                 args.out_dir,
                 f"stage1_{split_name}_embeddings.npz",
             )
-
-            export_embeddings(
-                model=model,
-                loader=loaders[split_name],
-                device=device,
-                output_npz_path=out_path,
-                split_name=split_name,
-            )
+            if split_name == "train":
+                export_embeddings(
+                    model=model,
+                    loader=loaders["trainNoSampler"],
+                    device=device,
+                    output_npz_path=out_path,
+                    split_name=split_name,
+                )
+            else:
+                export_embeddings(
+                    model=model,
+                    loader=loaders[split_name],
+                    device=device,
+                    output_npz_path=out_path,
+                    split_name=split_name,
+                )
 
             print(f"[INFO] saved embeddings: {out_path}")
 

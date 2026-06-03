@@ -269,6 +269,15 @@ def build_dataloaders(
             collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
+        # 修正在保存stage2需要的z和meta info时，在train中出现重复flow问题，这里和run_stage1.py中loader=loaders["trainNoSampler"], 相对应（line261）
+        "trainNoSampler": DataLoader(
+            datasets["train"],
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=custom_collate_fn,
+            pin_memory=True,
+        ),
         "val": DataLoader(
             datasets["val"],
             batch_size=batch_size,

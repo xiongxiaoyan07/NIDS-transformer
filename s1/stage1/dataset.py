@@ -18,6 +18,17 @@ class PrecomputedFlowDataset(Dataset):
         self.labels = data['labels']  # [N]
         self.flow_ids = data['flow_ids']  # [N]
 
+        # # 检查重复
+        # unique_ids, counts = np.unique(np.array(self.flow_ids, dtype=np.int64), return_counts=True)
+        # dup_ids = unique_ids[counts > 1]
+        # print(f"[INFO] ！！！！！！！！！！！ PrecomputedFlowDataset  flow_ids shape: {self.flow_ids.shape}")
+        # # 这里也没有重复的
+        # if len(dup_ids) > 0:
+        #     total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
+        #     examples = dup_ids[:10].tolist()
+        #     print(
+        #         f"[INFO] PrecomputedFlowDataset---------------Total duplicated: {total} Examples: {examples}")
+
         # Optional Stage2 metadata
         self.flow_start_timestamp_us = (
             data["flow_start_timestamp_us"]

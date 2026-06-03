@@ -249,6 +249,13 @@ def chronological_train_val_test_split(
     #    出现在多个 split 中。
     required_cols = [flow_id_col, label_col, time_col]
     _ensure_columns(flows, required_cols, "flows dataframe")
+    # print("[******INFO***111111****]chronological_train_val_test_split ---- flows' shape = ",flows.shape)
+    # # 这里是没有重复的
+    # if flows[flow_id_col].duplicated().any():
+    #     dup_mask = flows[flow_id_col].duplicated()
+    #     examples = flows.loc[dup_mask, flow_id_col].head(10).tolist()
+    #     total = int(dup_mask.sum())
+    #     print(f"[******chronological_train_val_test_split********]Duplicated flow_id in Stage1 outputs. Total duplicated: {total} Examples: {examples}")
 
     df = flows[required_cols].drop_duplicates(flow_id_col).copy()
 
@@ -321,6 +328,15 @@ def chronological_train_val_test_split(
     print("[INFO] splits.py ------ chronological_train_val_test_split-----------val_df \n", val_df.head(3))
     test_df = df.iloc[b2:]
     print("[INFO] splits.py ------ chronological_train_val_test_split-----------test_df \n", test_df.head(3))
+
+    # print("[******INFO****22222***]chronological_train_val_test_split----train_df's shape = ",train_df.shape)
+    # # 这里还没有重复的flow_id
+    # if train_df[flow_id_col].duplicated().any():
+    #     dup_mask = train_df[flow_id_col].duplicated()
+    #     examples = train_df.loc[dup_mask, flow_id_col].head(10).tolist()
+    #     total = int(dup_mask.sum())
+    #     print(
+    #         f"[******chronological_train_val_test_split*****2222train_df***]Duplicated flow_id in Stage1 outputs. Total duplicated: {total} Examples: {examples}")
 
     splits = {
         "train": [int(x) for x in train_df[flow_id_col].tolist()],

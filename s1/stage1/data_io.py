@@ -166,6 +166,26 @@ def generate_and_save_stage1_tensors(
     inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
     use_flow_features = flow_fusion_cfg.get("enabled", False)
 
+    # print("[INFO] data_ip.py ------ generate_and_save_stage1_tensors  00000 ---", save_name_prefix)
+    # print("[INFO] data_io.py ------ generate_and_save_stage1_tensors --- 11111 flows shape = ", flows.shape)
+    # # 这里也是没有重复的
+    # if flows["flow_id"].duplicated().any():
+    #     dup_mask = flows["flow_id"].duplicated()
+    #     examples = flows.loc[dup_mask, "flow_id"].head(10).tolist()
+    #     total = int(dup_mask.sum())
+    #     print(f"data_io.py------Duplicated flow_id in Stage1 flows. Total duplicated: {total} Examples: {examples}")
+    #     # 检查重复
+    #
+    # unique_ids, counts = np.unique(np.array(flow_ids, dtype=np.int64), return_counts=True)
+    # dup_ids = unique_ids[counts > 1]
+    # print("[INFO] data_io.py----2222222----flow_ids len: ", len(flow_ids))
+    # # 这里也没有重复的
+    # if len(dup_ids) > 0:
+    #     total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
+    #     examples = dup_ids[:10].tolist()
+    #     print(
+    #         f"[INFO]  data_io.py----2222222---------------Total duplicated: {total} Examples: {examples}")
+
     # 1. 固定 flow_ids 顺序
     flow_ids = [int(x) for x in flow_ids]
     num_flows = len(flow_ids)

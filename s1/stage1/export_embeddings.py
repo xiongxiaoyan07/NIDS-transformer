@@ -45,7 +45,21 @@ def export_embeddings(
     all_flow_start_ts = []
     all_source_ids = []
     all_destination_ids = []
-
+    # 我知道为什么train中有重复数据了，那是因为loader，train的loader
+    # "train": DataLoader(
+    #             datasets["train"],
+    #             batch_size=batch_size,
+    #             sampler=sampler,  # 使用sampler而不是shuffle
+    #             num_workers=num_workers,
+    #             collate_fn=custom_collate_fn,
+    #             pin_memory=True,
+    #         ),
+    # sampler = WeightedRandomSampler(
+    #     weights=sample_weights,
+    #     num_samples=len(sample_weights),
+    #     replacement=True
+    # )
+    # WeightedRandomSampler用于在数据加载阶段实现加权随机采样的工具，其最核心的用途是针对不平衡数据集，通过在训练时调整样本被选中的概率，来解决模型预测偏向多数类的问题
     for batch in loader:
         x = batch["x"].to(device)
         t = batch["time"].to(device)
@@ -85,6 +99,16 @@ def export_embeddings(
             all_destination_ids.extend([str(x) for x in batch["destination_id"]])
 
     z_mat = np.concatenate(all_z, axis=0)
+
+    # 检查重复
+    # unique_ids, counts = np.unique(np.array(all_flow_ids, dtype=np.int64), return_counts=True)
+    # dup_ids = unique_ids[counts > 1]
+    # print("[INFO] Stage1 export_embeddings: ", split_name)
+    # #train: 这里已经看是有重复的了-----修改之后这里就不存在重复的flow_id了
+    # if len(dup_ids) > 0:
+    #     total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
+    #     examples = dup_ids[:10].tolist()
+    #     print(f"[INFO] Stage1 export_embeddings---------------Duplicated flow_id in {split_name}. Total duplicated: {total} Examples: {examples}")
 
     save_dict = {
         "flow_id": np.array(all_flow_ids, dtype=np.int64),
