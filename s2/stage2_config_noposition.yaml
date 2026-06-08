@@ -36,7 +36,7 @@ model:
   num_classes: 2
   # last / mean / attention
   pooling: last
-  use_positional_encoding: true
+  use_positional_encoding: false
   max_len: 512
 training:
   epochs: 500

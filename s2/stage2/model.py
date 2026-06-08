@@ -62,7 +62,7 @@ class Stage2Transformer(nn.Module):
             if self.input_dim == self.d_model
             else nn.Linear(self.input_dim, self.d_model)
         )
-
+        print("[INFO] Stage2Transformer.__init__*********** use_positional_encoding=",model_cfg.get("use_positional_encoding", True))
         self.pos = (
             SinusoidalPositionalEncoding(
                 self.d_model,

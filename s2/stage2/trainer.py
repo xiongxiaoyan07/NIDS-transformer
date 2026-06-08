@@ -10,20 +10,45 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .dataset import Stage2Dataset, stage2_collate_fn
+from .losses import compute_class_alpha,FocalLossWithLabelSmoothing
 from .utils import binary_metrics, metric_value, save_json
 from .metrics import classification_metrics
 
 def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.device) -> nn.Module:
-    if not bool(cfg["training"].get("class_weighted_loss", True)):
-        return nn.CrossEntropyLoss()
+    train_cfg = cfg["training"]
+    loss_type = train_cfg.get("loss_type", "focal")
+    print("[INFO]---trainer.py---make_loss_fn---label 分布: {}".format(np.bincount(train_labels.astype(int), minlength=2).astype(np.float64)))
+    if loss_type == "ce":
+        if not bool(train_cfg.get("class_weighted_loss", True)):
+            return nn.CrossEntropyLoss()
 
-    counts = np.bincount(train_labels.astype(int), minlength=2).astype(np.float64)
-    print("[INFO] trainer.py ---- make_loss_fn ----- train_labels counts = ", counts)
-    counts = np.maximum(counts, 1.0)
-    weights = counts.sum() / (len(counts) * counts)
-    weights_t = torch.tensor(weights, dtype=torch.float32, device=device)
-    print(f"[INFO] class_weighted_loss weights: {weights.tolist()}")
-    return nn.CrossEntropyLoss(weight=weights_t)
+        counts = np.bincount(train_labels.astype(int), minlength=2).astype(np.float64)
+        counts = np.maximum(counts, 1.0)
+        weights = counts.sum() / (len(counts) * counts)
+        weights_t = torch.tensor(weights, dtype=torch.float32, device=device)
+
+        print("[INFO] CE class counts:", counts.tolist())
+        print("[INFO] CE class weights:", weights.tolist())
+
+        return nn.CrossEntropyLoss(weight=weights_t)
+
+    if loss_type == "focal":
+        alpha = None
+        if bool(train_cfg.get("class_weighted_loss", True)):
+            alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+
+        gamma = float(train_cfg.get("focal_gamma", 2.0))
+        label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
+
+        print(f"[INFO] Using FocalLoss: gamma={gamma}, label_smoothing={label_smoothing}")
+
+        return FocalLossWithLabelSmoothing(
+            alpha=alpha,
+            gamma=gamma,
+            label_smoothing=label_smoothing,
+        )
+
+    raise ValueError(f"Unknown training.loss_type: {loss_type}")
 
 def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader:
     train_cfg = cfg["training"]
@@ -107,18 +132,19 @@ def train_one_epoch(
     return total_loss / max(total_n, 1)
 
 @torch.no_grad()
+@torch.no_grad()
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
     loss_fn: nn.Module,
     device: torch.device,
-    threshold: float,
+    threshold: Optional[float] = 0.5,
 ) -> Tuple[Dict[str, Any], pd.DataFrame]:
     model.eval()
 
     losses: List[float] = []
     all_y: List[np.ndarray] = []
-    all_prob: List[np.ndarray] = []
+    all_pred: List[np.ndarray] = []
     all_score: List[np.ndarray] = []
     all_flow_ids: List[int] = []
 
@@ -127,37 +153,36 @@ def evaluate(
         mask = batch["mask"].to(device, non_blocking=True)
         y = batch["label"].to(device, non_blocking=True)
 
-        with torch.no_grad():
-            logits = model(x, mask)
-            loss = loss_fn(logits, y)
-            # prob = torch.softmax(logits, dim=1)[:, 1]
-            probs = torch.softmax(logits, dim=-1)
+        logits = model(x, mask)
+        loss = loss_fn(logits, y)
 
-            # 如果提供了阈值，使用自定义阈值
-            if threshold is not None:
-                preds = (probs[:, 1] >= threshold).long()
-            else:
-                preds = logits.argmax(dim=-1)
+        probs = torch.softmax(logits, dim=-1)
+        score_label1 = probs[:, 1]
 
-            losses.append(float(loss.item()) * y.size(0))
-            all_y.append(y.detach().cpu().numpy().tolist())
-            all_prob.append(preds.detach().cpu().numpy().tolist())
-            all_score.append(probs[:, 1].cpu().numpy().tolist())
-            all_flow_ids.extend(batch["flow_id"].cpu().numpy().tolist())
+        # 如果提供了阈值，使用自定义阈值
+        if threshold is None:
+            preds = logits.argmax(dim=-1)
+        else:
+            preds = (score_label1 >= float(threshold)).long()
+
+        losses.append(float(loss.item()) * y.size(0))
+        all_y.append(y.detach().cpu().numpy())
+        all_pred.append(preds.detach().cpu().numpy())
+        all_score.append(score_label1.detach().cpu().numpy())
+        all_flow_ids.extend(batch["flow_id"].cpu().numpy().tolist())
 
     y_true = np.concatenate(all_y, axis=0)
-    y_prob = np.concatenate(all_prob, axis=0)
+    y_pred = np.concatenate(all_pred, axis=0)
     y_score = np.concatenate(all_score, axis=0)
 
-    # metrics = binary_metrics(y_true, y_prob, threshold=threshold)
     metrics = classification_metrics(
         y_true=y_true,
-        y_pred=y_prob,
+        y_pred=y_pred,
         y_score=y_score,
         num_classes=2,
-        # loss=avg_loss,
         threshold=threshold,
     )
+
     metrics["loss"] = float(np.sum(losses) / max(len(y_true), 1))
     metrics["num_samples"] = int(len(y_true))
     metrics["positive_count"] = int(y_true.sum())
@@ -167,11 +192,53 @@ def evaluate(
         {
             "flow_id": np.array(all_flow_ids, dtype=np.int64),
             "label": y_true.astype(int),
-            "prob_label_1": y_prob.astype(float),
-            "pred": (y_prob >= threshold).astype(int),
+            "prob_label_1": y_score.astype(float),
+            "pred": y_pred.astype(int),
         }
     )
+
     return metrics, pred_df
+
+def find_best_threshold(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    metric: str = "f1",
+    threshold_min: float = 0.01,
+    threshold_max: float = 0.99,
+    threshold_steps: int = 99,
+) -> Tuple[float, Dict[str, Any]]:
+    thresholds = np.linspace(threshold_min, threshold_max, threshold_steps)
+
+    best_threshold = 0.5
+    best_value = -float("inf")
+    best_metrics: Dict[str, Any] = {}
+
+    for t in thresholds:
+        y_pred = (y_score >= t).astype(int)
+
+        metrics = classification_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            y_score=y_score,
+            num_classes=2,
+            threshold=float(t),
+        )
+
+        if metric == "f1":
+            value = metrics["f1_label1"]
+        elif metric == "recall":
+            value = metrics["recall_label1"]
+        elif metric == "precision":
+            value = metrics["precision_label1"]
+        else:
+            raise ValueError(f"Unknown threshold_metric: {metric}")
+
+        if value > best_value:
+            best_value = value
+            best_threshold = float(t)
+            best_metrics = metrics
+
+    return best_threshold, best_metrics
 
 class Stage2Trainer:
     def __init__(
@@ -295,11 +362,34 @@ class Stage2Trainer:
         threshold = float(self.cfg["training"].get("threshold", 0.5))
         ckpt = self.load_best()
 
+        if bool(self.cfg["training"].get("auto_threshold", True)):
+            _, val_pred_df = evaluate(
+                model=self.model,
+                loader=self.eval_loaders["val"],
+                loss_fn=self.loss_fn,
+                device=self.device,
+                threshold=0.5,
+            )
+
+            threshold, threshold_metrics = find_best_threshold(
+                y_true=val_pred_df["label"].to_numpy(),
+                y_score=val_pred_df["prob_label_1"].to_numpy(),
+                metric=self.cfg["training"].get("threshold_metric", "f1"),
+                threshold_min=float(self.cfg["training"].get("threshold_min", 0.01)),
+                threshold_max=float(self.cfg["training"].get("threshold_max", 0.99)),
+                threshold_steps=int(self.cfg["training"].get("threshold_steps", 99)),
+            )
+
+            self.cfg["training"]["threshold"] = threshold
+            print(f"[INFO] Auto-selected threshold on val: {threshold:.4f}")
+            print(f"[INFO] Val metrics at selected threshold: {threshold_metrics}")
+
         context_lengths = np.array([len(x) for x in context_indices], dtype=np.int64)
         final_metrics: Dict[str, Any] = {
             "best_epoch": int(ckpt["epoch"]),
             "best_score": float(ckpt["best_score"]),
             "metric_for_best": ckpt["metric_for_best"],
+            "threshold": float(threshold),
             "config": self.cfg,
             "data": {
                 "num_flows": int(len(meta_df)),

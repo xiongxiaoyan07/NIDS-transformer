@@ -67,7 +67,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override training.batch_size",
     )
-    # use_positional_encoding
+    # model --- use_positional_encoding
+    # model --- pooling
     return parser.parse_args()
 
 def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
@@ -83,7 +84,6 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[s
         cfg["training"]["epochs"] = args.epochs
     if args.batch_size is not None:
         cfg["training"]["batch_size"] = args.batch_size
-
     return cfg
 
 def print_data_summary(meta_df: pd.DataFrame, z_sorted: np.ndarray, context_indices: List[np.ndarray]) -> None:
