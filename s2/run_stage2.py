@@ -11,7 +11,7 @@ from stage2.config import load_config, save_config
 from stage2.context import ContextIndexBuilder
 from stage2.data_io import prepare_sorted_stage2_data
 from stage2.dataset import Stage2Dataset
-from stage2.model import Stage2Transformer
+from stage2.model import build_stage2_model
 from stage2.trainer import Stage2Trainer
 from stage2.utils import get_device, safe_mkdir, set_seed
 
@@ -69,6 +69,46 @@ def parse_args() -> argparse.Namespace:
     )
     # model --- use_positional_encoding
     # model --- pooling
+    parser.add_argument(
+        "--model_pooling",
+        type=str,
+        default="last",
+        choices=["last", "mean", "attention"],
+        help="Override model.pooling",
+    )
+    parser.add_argument(
+        "--cls_head",
+        type=int,
+        default=1,
+        help="Override model.cls_head",
+    )
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default=None,
+        choices=["no_context_mlp", "lstm", "transformer"],
+        help="Override model.model_type",
+    )
+
+    parser.add_argument(
+        "--lstm_hidden_dim",
+        type=int,
+        default=None,
+        help="Override model.lstm_hidden_dim",
+    )
+
+    parser.add_argument(
+        "--lstm_num_layers",
+        type=int,
+        default=None,
+        help="Override model.lstm_num_layers",
+    )
+
+    parser.add_argument(
+        "--lstm_bidirectional",
+        action="store_true",
+        help="Override model.lstm_bidirectional=True",
+    )
     return parser.parse_args()
 
 def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
@@ -84,6 +124,21 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[s
         cfg["training"]["epochs"] = args.epochs
     if args.batch_size is not None:
         cfg["training"]["batch_size"] = args.batch_size
+    if args.model_pooling is not None:
+        cfg["model"]["pooling"] = args.model_pooling
+    if args.cls_head is not None:
+        cfg["model"]["cls_head"] = args.cls_head
+    if args.model_type is not None:
+        cfg["model"]["model_type"] = args.model_type
+
+    if args.lstm_hidden_dim is not None:
+        cfg["model"]["lstm_hidden_dim"] = args.lstm_hidden_dim
+
+    if args.lstm_num_layers is not None:
+        cfg["model"]["lstm_num_layers"] = args.lstm_num_layers
+
+    if args.lstm_bidirectional:
+        cfg["model"]["lstm_bidirectional"] = True
     return cfg
 
 def print_data_summary(meta_df: pd.DataFrame, z_sorted: np.ndarray, context_indices: List[np.ndarray]) -> None:
@@ -150,7 +205,9 @@ def main() -> None:
     input_dim = int(z_sorted.shape[1])
     print("[INFO] Stage2 --------- input_dim = ", input_dim)
     print("[INFO] Stage2 --------- Building model")
-    model = Stage2Transformer(cfg, input_dim=input_dim).to(device)
+    print("[INFO] Stage2 --------- model_type =", cfg["model"].get("model_type", "transformer"))
+    print("[INFO] Stage2 --------- model.pooling =", cfg["model"].get("pooling", "last"))
+    model = build_stage2_model(cfg, input_dim=input_dim).to(device)
     print(model)
 
     print("[INFO] Stage2 --------- Building trainer")

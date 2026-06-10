@@ -331,7 +331,8 @@ def generate_and_save_stage1_tensors(
         print(f"[INFO] **************** stage1 flow_feats tensors")
 
     # 重要：compressed 很慢。训练阶段建议先用 uncompressed。
-    np.savez(save_path, **save_dict)
+    # np.savez(save_path, **save_dict)
+    np.savez_compressed(save_path, **save_dict)
 
     print(f"[INFO] saved precomputed stage1 tensors: {save_path}")
     print(f"[INFO] Keys in saved file: {list(save_dict.keys())}")

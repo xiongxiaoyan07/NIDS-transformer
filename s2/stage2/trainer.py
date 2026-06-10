@@ -13,6 +13,7 @@ from .dataset import Stage2Dataset, stage2_collate_fn
 from .losses import compute_class_alpha,FocalLossWithLabelSmoothing
 from .utils import binary_metrics, metric_value, save_json
 from .metrics import classification_metrics
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.device) -> nn.Module:
     train_cfg = cfg["training"]
@@ -132,7 +133,6 @@ def train_one_epoch(
     return total_loss / max(total_n, 1)
 
 @torch.no_grad()
-@torch.no_grad()
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
@@ -147,43 +147,50 @@ def evaluate(
     all_pred: List[np.ndarray] = []
     all_score: List[np.ndarray] = []
     all_flow_ids: List[int] = []
+    total_loss = 0.0
+    num_batches = 0
 
     for batch in loader:
         x = batch["context_z"].to(device, non_blocking=True)
         mask = batch["mask"].to(device, non_blocking=True)
         y = batch["label"].to(device, non_blocking=True)
 
-        logits = model(x, mask)
-        loss = loss_fn(logits, y)
+        with torch.no_grad():
+            logits = model(x, mask)
+            loss = loss_fn(logits, y)
 
-        probs = torch.softmax(logits, dim=-1)
-        score_label1 = probs[:, 1]
+            probs = torch.softmax(logits, dim=-1)
+            score_label1 = probs[:, 1]
 
-        # 如果提供了阈值，使用自定义阈值
-        if threshold is None:
-            preds = logits.argmax(dim=-1)
-        else:
-            preds = (score_label1 >= float(threshold)).long()
+            # 如果提供了阈值，使用自定义阈值
+            if threshold is None:
+                preds = logits.argmax(dim=-1)
+            else:
+                preds = (score_label1 >= float(threshold)).long()
 
         losses.append(float(loss.item()) * y.size(0))
         all_y.append(y.detach().cpu().numpy())
         all_pred.append(preds.detach().cpu().numpy())
         all_score.append(score_label1.detach().cpu().numpy())
         all_flow_ids.extend(batch["flow_id"].cpu().numpy().tolist())
+        total_loss += loss.item()
+        num_batches += 1
 
     y_true = np.concatenate(all_y, axis=0)
     y_pred = np.concatenate(all_pred, axis=0)
     y_score = np.concatenate(all_score, axis=0)
+    avg_loss = total_loss / num_batches
 
     metrics = classification_metrics(
         y_true=y_true,
         y_pred=y_pred,
         y_score=y_score,
         num_classes=2,
+        loss=avg_loss,
         threshold=threshold,
     )
 
-    metrics["loss"] = float(np.sum(losses) / max(len(y_true), 1))
+    metrics["loss"] = avg_loss #float(np.sum(losses) / max(len(y_true), 1))
     metrics["num_samples"] = int(len(y_true))
     metrics["positive_count"] = int(y_true.sum())
     metrics["positive_rate"] = float(y_true.mean()) if len(y_true) else 0.0
@@ -270,7 +277,7 @@ class Stage2Trainer:
             lr=float(cfg["training"].get("lr", 3e-4)),
             weight_decay=float(cfg["training"].get("weight_decay", 1e-4)),
         )
-
+    # train model
     def fit(self) -> Dict[str, Any]:
         epochs = int(self.cfg["training"].get("epochs", 100))
         patience = int(self.cfg["training"].get("patience", 20))
@@ -280,6 +287,32 @@ class Stage2Trainer:
 
         grad_clip_norm = self.cfg["training"].get("grad_clip_norm", 1.0)
         grad_clip_norm = None if grad_clip_norm is None else float(grad_clip_norm)
+
+        # 你的原代码 warmup_epochs = min(10, epochs // 10)。
+        # 这里加 max(1, ...) 防止 epochs 较小时 warmup_epochs=0。
+        warmup_epochs = max(1, min(10, epochs // 10))
+        cosine_epochs = max(1, epochs - warmup_epochs)
+
+        lr = float(self.cfg["training"].get("lr", 3e-4))
+        print("[Stage2Trainer]---fit lr= ", lr)
+        warmup_scheduler = LinearLR(
+            self.optimizer,
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=warmup_epochs,
+        )
+
+        cosine_scheduler = CosineAnnealingLR(
+            self.optimizer,
+            T_max=cosine_epochs,
+            eta_min=lr * 0.01,
+        )
+
+        scheduler = SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs],
+        )
 
         best_score = -float("inf")
         best_epoch = -1
@@ -295,6 +328,9 @@ class Stage2Trainer:
                 device=self.device,
                 grad_clip_norm=grad_clip_norm,
             )
+
+            scheduler.step()
+
             metrics_by_split: Dict[str, Dict[str, Any]] = {}
             for split, loader in self.eval_loaders.items():
                 metrics, _ = evaluate(
@@ -352,12 +388,13 @@ class Stage2Trainer:
             if 0 < patience <= bad_epochs:
                 print(f"[INFO] Early stopping at epoch={epoch}, best_epoch={best_epoch}")
                 break
-
+    # load best model
     def load_best(self) -> Dict[str, Any]:
         path = os.path.join(self.out_dir, "stage2_best_model.pt")
         ckpt = torch.load(path, map_location=self.device)
         self.model.load_state_dict(ckpt["model_state_dict"])
         return ckpt
+    # evaluate the model
     def final_evaluate_and_save(self, meta_df, context_indices) -> Dict[str, Any]:
         threshold = float(self.cfg["training"].get("threshold", 0.5))
         ckpt = self.load_best()
@@ -515,22 +552,3 @@ def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] 
         for cls, f1 in f1_sorted:
             label_name = class_names[int(cls)] if class_names else cls
             print(f"  {label_name:<30s}: {f1:.4f}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
