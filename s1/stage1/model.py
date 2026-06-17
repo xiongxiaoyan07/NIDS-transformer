@@ -132,7 +132,9 @@ class TimeAwareEncoding(nn.Module):
         #     time_intervals = time_log
         # 所有的time的数据在预处理的时候都加上了log1p,所以这里就直接反推原始间隔，不然配置太多改动太大
         # 反推原始间隔
-        time_intervals = torch.expm1(time_log)
+        # time_intervals = torch.expm1(time_log)
+        # 去掉时间反推
+        time_intervals = time_log
         # 确保非负
         time_intervals = torch.clamp(time_intervals, min=0.0)
         # 累积求和
@@ -205,7 +207,7 @@ class TimeAwareEncoding(nn.Module):
         """
         batch_size, seq_len, _ = e.shape
 
-        # Ensure time_log is 2D
+        # Ensure time_log is 2D [B, L]
         if time_log.dim() == 3:
             time_log = time_log.squeeze(-1)
 
@@ -358,6 +360,46 @@ class FlowFusion(nn.Module):
             flow_proj = self.flow_proj(flow_encoded)  # [B, d_model]
             return pooled_proj + flow_proj  # [B, d_model]
 
+
+# ============================================================
+# Shared classifier builder
+# ============================================================
+
+def build_cls_head(d_model: int,cls_head_config: int, dropout: float, num_classes: int = 2) -> nn.Module:
+    """
+    Keep the classifier style close to your original Stage2Transformer.
+    """
+    # ---- Classifier ----
+    # dropout = float(model_cfg.get("dropout", 0.3))
+    # cls_head_config = int(model_cfg.get("cls_head", 0))
+    print("[INFO] Stage2Transformer.__init__*********** cls_head_config=",cls_head_config)
+    if cls_head_config == 2:
+        return nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
+            nn.Linear(d_model,d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, num_classes),
+        )
+    elif cls_head_config == 3:
+        return nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.3),
+            nn.Linear(d_model // 2, num_classes),
+        )
+    else:
+        return nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, num_classes),
+        )
+
 class Stage1TimeAwareTransformer(nn.Module):
     """
     Stage1 intra-flow packet-sequence Transformer.
@@ -420,6 +462,9 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         record_projection_cfg = model_cfg.get("record_projection", None)
 
+        print(f"[INFO]------model --- __init__---d_model={d_model}, nhead={nhead}, num_layers={num_layers}, "
+              f"dim_feedforward={dim_feedforward}, dropout={dropout}, max_seq_len={max_seq_len}, use_positional_encoding={use_positional_encoding}, "
+              f"use_time_encoding={use_time_encoding}")
         # Time encoding alpha (smoothing factor)
         time_encoding_cfg = model_cfg.get("time_encoding", {})
         alpha = float(time_encoding_cfg.get("alpha", 1e-07))
@@ -497,26 +542,16 @@ class Stage1TimeAwareTransformer(nn.Module):
             print(f"[INFO] Encoding: None")
 
         # ---- Classifier ----
-        if dropout > 0.25:
-            self.classifier = nn.Sequential(
-                nn.LayerNorm(d_model),
-                nn.Dropout(dropout),
-                nn.Linear(d_model, d_model),
-                nn.GELU(),
-                nn.Dropout(dropout),
-                nn.Linear(d_model, 2),
-            )
-        else:
-            self.classifier = nn.Sequential(
-                nn.LayerNorm(d_model),
-                nn.Linear(d_model, d_model),
-                nn.GELU(),
-                nn.Dropout(dropout * 0.5),
-                nn.Linear(d_model, d_model // 2),
-                nn.GELU(),
-                nn.Dropout(dropout * 0.3),
-                nn.Linear(d_model // 2, 2),
-            )
+        cls_head_config = int(model_cfg.get("cls_head", 0))
+
+        print("[INFO] Stage2Transformer.__init__*********** cls_head_config=", cls_head_config)
+
+        self.classifier = build_cls_head(
+            d_model=d_model,
+            dropout=dropout,
+            num_classes=2,
+            cls_head_config=cls_head_config
+        )
 
     def forward(
             self,

@@ -26,7 +26,7 @@ from .splits import (
     chronological_train_val_test_split,
     chronological_train_val_split_for_external_test,
 )
-from .utils import safe_mkdir, save_json
+from .utils import safe_mkdir, save_json, worker_init_fn
 from torch.utils.data import WeightedRandomSampler
 from torch.utils.data.dataloader import default_collate
 
@@ -266,6 +266,7 @@ def build_dataloaders(
             batch_size=batch_size,
             sampler=sampler,  # 使用sampler而不是shuffle
             num_workers=num_workers,
+            worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
@@ -275,6 +276,7 @@ def build_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
@@ -283,6 +285,7 @@ def build_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
         ),
@@ -291,6 +294,7 @@ def build_dataloaders(
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
+            worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
         ),

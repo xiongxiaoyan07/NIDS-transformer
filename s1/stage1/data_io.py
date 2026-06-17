@@ -15,7 +15,7 @@ from scipy.signal import max_len_seq
 
 from .preprocessing import Stage1Preprocessor
 
-def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+def clean_dataframe(df: pd.DataFrame, type_str: str) -> pd.DataFrame:
     """
     Basic cleaning:
     - Strip column names.
@@ -31,7 +31,13 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.replace([np.inf, -np.inf], np.nan)
     # 去除掉flow_id为0的数据
-    df = df[df['flow_id'] != 0]
+    # df = df[df['flow_id'] != 0]
+    if type_str == "flow":
+        df = df[(df['flow_id'] != 0) & (df['flow_start_timestamp_us'] != 0) &
+                df['flow_id'].notna() & df['flow_start_timestamp_us'].notna()]
+    else:
+        df = df[(df['flow_id'] != 0) & (df['timestamp_us'] != 0) &
+                df['flow_id'].notna() & df['timestamp_us'].notna()]
 
     return df
 
@@ -53,8 +59,8 @@ def read_stage1_csvs(
 
     print("[INFO] data_io.py ------ read_stage1_csvs --- start")
 
-    packets = clean_dataframe(pd.read_csv(packet_csv))
-    flows = clean_dataframe(pd.read_csv(flow_csv))
+    packets = clean_dataframe(pd.read_csv(packet_csv), "packet")
+    flows = clean_dataframe(pd.read_csv(flow_csv), "flow")
 
     required_packets = [flow_id_col, packet_time_col]
     required_flows = [flow_id_col, label_col]

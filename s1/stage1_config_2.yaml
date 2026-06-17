@@ -230,8 +230,8 @@ preprocessing:
 model:
   d_model: 128          # 回退到128（数据量不足以支撑256）
   nhead: 8
-  num_layers: 2         # 回退到2层（减少过拟合）
-  dim_feedforward: 512  # 回退到512
+  num_layers: 4         # 回退到2层（减少过拟合）
+  dim_feedforward: 128  # 回退到512
   dropout: 0.3          # 增加dropout防止过拟合
   use_positional_encoding: true
   use_time_encoding: true

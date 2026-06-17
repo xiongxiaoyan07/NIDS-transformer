@@ -12,7 +12,7 @@ data:
 context:
   # time_only / source_host / destination_host / endpoint
   method: time_only
-  window_size: 128
+  window_size: 32
   include_target: true
   # online:
   #   context can use any earlier flow in global chronological order.
@@ -36,10 +36,10 @@ model:
   # None means use Stage1 z dimension directly.
   d_model: null
   # Transformer parameters
-  nhead: 8
-  num_layers: 2
-  dim_feedforward: 512
-  dropout: 0.3
+  nhead: 4
+  num_layers: 1
+  dim_feedforward: 128
+  dropout: 0.5
   num_classes: 2
   # last / mean / attention
   pooling: last
@@ -55,26 +55,26 @@ model:
 
 training:
   epochs: 500
-  batch_size: 128
-  lr: 0.0003
-  weight_decay: 0.0001
+  batch_size: 512
+  lr: 0.0005
+  weight_decay: 0.05
   num_workers: 0
-  patience: 20
+  patience: 50
   metric_for_best: f1_label1
   use_weighted_sampler: true
   # loss
   loss_type: focal # ce / focal
-  class_weighted_loss: true
-  focal_gamma: 2.0
-  label_smoothing: 0.02
+  class_weighted_loss: false
+  focal_gamma: 0.3
+  label_smoothing: 0.2
 
-  grad_clip_norm: 1.0
+  grad_clip_norm: 0.5
   # threshold
   threshold: 0.5
   auto_threshold: true
-  threshold_metric: f1  # f1 / recall / precision
+  threshold_metric: f1_label1  # f1_label1 / recall / precision
   threshold_min: 0.01
   threshold_max: 0.99
-  threshold_steps: 99
+  threshold_steps: 199
 
   device: auto

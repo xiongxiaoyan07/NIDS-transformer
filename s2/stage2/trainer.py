@@ -37,6 +37,12 @@ def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.de
         alpha = None
         if bool(train_cfg.get("class_weighted_loss", True)):
             alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+        else:
+            # ⭐ 手动指定 alpha（在配置中设置）
+            manual_alpha = train_cfg.get("alpha", None)
+            if manual_alpha is not None:
+                alpha = torch.tensor(manual_alpha, dtype=torch.float32, device=device)
+                print(f"[INFO] Using manual alpha: {manual_alpha}")
 
         gamma = float(train_cfg.get("focal_gamma", 2.0))
         label_smoothing = float(train_cfg.get("label_smoothing", 0.0))
@@ -209,10 +215,10 @@ def evaluate(
 def find_best_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
-    metric: str = "f1",
+    metric: str = "f1_label1",
     threshold_min: float = 0.01,
     threshold_max: float = 0.99,
-    threshold_steps: int = 99,
+    threshold_steps: int = 199,
 ) -> Tuple[float, Dict[str, Any]]:
     thresholds = np.linspace(threshold_min, threshold_max, threshold_steps)
 
@@ -231,7 +237,7 @@ def find_best_threshold(
             threshold=float(t),
         )
 
-        if metric == "f1":
+        if metric == "f1_label1":
             value = metrics["f1_label1"]
         elif metric == "recall":
             value = metrics["recall_label1"]
@@ -291,6 +297,7 @@ class Stage2Trainer:
         # 你的原代码 warmup_epochs = min(10, epochs // 10)。
         # 这里加 max(1, ...) 防止 epochs 较小时 warmup_epochs=0。
         warmup_epochs = max(1, min(10, epochs // 10))
+        print("[Stage2Trainer] ---- fit ------warmup_epochs = ", warmup_epochs)
         cosine_epochs = max(1, epochs - warmup_epochs)
 
         lr = float(self.cfg["training"].get("lr", 3e-4))
@@ -536,7 +543,7 @@ def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] 
     打印详细测试指标，格式与 MLP Baseline 一致。
     """
     print("\n" + "=" * 50)
-    print(f"{'Stage1 Transformer - 测试集结果':^50}")
+    print(f"{'Stage2 Transformer - 测试集结果':^50}")
     print("=" * 50)
     print(f"  Loss:              {test_metrics.get('loss', 0):.4f}")
     print(f"  F1 (Macro):        {test_metrics.get('macro_f1', 0):.4f}")
