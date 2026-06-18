@@ -15,6 +15,7 @@ from typing import Dict, Any, Optional, Tuple
 import joblib
 import numpy as np
 import pandas as pd
+import torch
 from torch.utils.data import DataLoader
 
 from .data_io import read_stage1_csvs, get_or_generate_stage1_tensors
@@ -57,6 +58,7 @@ def build_dataloaders(
     out_dir: str,
     external_packet_csv: Optional[str] = None,
     external_flow_csv: Optional[str] = None,
+    seed: int = 42
 ) -> Tuple[Dict[str, DataLoader], Stage1Preprocessor, Dict[str, Any]]:
     """
     Build train/val/test DataLoaders.
@@ -255,10 +257,14 @@ def build_dataloaders(
     print("计算样本权重: class_counts", class_counts)
     print("计算样本权重: sample_weights", sample_weights)
 
+    # 固定种子
+    g = torch.Generator()
+    g.manual_seed(seed)
     sampler = WeightedRandomSampler(
         weights=sample_weights,
         num_samples=len(sample_weights),
-        replacement=True
+        replacement=True,
+        generator=g
     )
     loaders = {
         "train": DataLoader(

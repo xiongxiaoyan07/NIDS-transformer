@@ -21,34 +21,21 @@ def set_seed(seed: int = 42, deterministic: bool = True):
         seed: 随机种子值
         deterministic: 是否使用确定性算法（会降低性能但确保可复现）
     """
-    # Python 随机
-    random.seed(seed)
-
-    # Numpy 随机
-    np.random.seed(seed)
-
-    # PyTorch 随机
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # 多GPU
-
     # 环境变量
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
-    if deterministic:
-        # CUDNN 确定性模式
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
-        # 警告：确定性模式可能影响性能
-        print("[INFO] 已启用 CUDNN 确定性模式（可能影响性能）")
-    else:
-        # 性能优先，但可能有轻微不确定性
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    torch.use_deterministic_algorithms(True)
 
     print(f"[INFO] 随机种子已设置: {seed}")
-    print(f"[INFO] 确定性模式: {deterministic}")
 
 def worker_init_fn(worker_id: int):
     """

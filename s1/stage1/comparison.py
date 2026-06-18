@@ -27,6 +27,7 @@ import xgboost as xgb
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestClassifier
 
+from stage1.utils import set_seed
 from .baselines import (
     FlowLevelMLP, LSTMClassifier, BiLSTMClassifier,
     GRUClassifier, CNN1DClassifier, StandardTransformer
@@ -85,13 +86,13 @@ class ModelBenchmark:
         # ============================================
         # Level 2: 经典深度学习
         # ============================================
-        self.models['MLP'] = FlowLevelMLP(
-            input_dim=self.flow_feature_dim if self.has_flow_feats else self.input_dim,
-            hidden_dims=[256, 128, 64],
-            dropout=0.3,
-            num_classes=self.num_classes
-        )
-        print("[✓] MLP")
+        # self.models['MLP'] = FlowLevelMLP(
+        #     input_dim=self.flow_feature_dim if self.has_flow_feats else self.input_dim,
+        #     hidden_dims=[256, 128, 64],
+        #     dropout=0.3,
+        #     num_classes=self.num_classes
+        # )
+        # print("[✓] MLP")
 
         if self.has_flow_feats:
             self.models['MLP_with_flow'] = FlowLevelMLP(
@@ -105,18 +106,18 @@ class ModelBenchmark:
         # ============================================
         # Level 3: 序列模型（无时间感知）
         # ============================================
-        self.models['LSTM-attention'] = LSTMClassifier(
-            input_dim=self.input_dim,
-            hidden_dim=128,
-            num_layers=2,
-            dropout=0.2,
-            bidirectional=False,
-            pooling='attention',
-            num_classes=self.num_classes
-        )
-        print("[✓] LSTM-attention")
+        # self.models['LSTM-attention'] = LSTMClassifier(
+        #     input_dim=self.input_dim,
+        #     hidden_dim=128,
+        #     num_layers=2,
+        #     dropout=0.2,
+        #     bidirectional=False,
+        #     pooling='attention',
+        #     num_classes=self.num_classes
+        # )
+        # print("[✓] LSTM-attention")
 
-        self.models['LSTM-mean'] = LSTMClassifier(
+        self.models['LSTM'] = LSTMClassifier(
             input_dim=self.input_dim,
             hidden_dim=128,
             num_layers=2,
@@ -127,49 +128,49 @@ class ModelBenchmark:
         )
         print("[✓] LSTM-mean")
 
-        self.models['BiLSTM-attention'] = BiLSTMClassifier(
+        self.models['BiLSTM'] = BiLSTMClassifier(
             input_dim=self.input_dim,
             hidden_dim=128,
             num_layers=2,
             dropout=0.2,
-            pooling='attention',
+            pooling='mean',
             num_classes=self.num_classes
         )
-        print("[✓] BiLSTM-attention")
+        print("[✓] BiLSTM-mean")
 
-        self.models['GRU-attention'] = GRUClassifier(
+        # self.models['GRU-attention'] = GRUClassifier(
+        #     input_dim=self.input_dim,
+        #     hidden_dim=128,
+        #     num_layers=2,
+        #     dropout=0.2,
+        #     bidirectional=False,
+        #     pooling='attention',
+        #     num_classes=self.num_classes
+        # )
+        # print("[✓] GRU-attention")
+
+        self.models['GRU'] = GRUClassifier(
             input_dim=self.input_dim,
             hidden_dim=128,
             num_layers=2,
             dropout=0.2,
             bidirectional=False,
-            pooling='attention',
+            pooling='mean',
             num_classes=self.num_classes
         )
-        print("[✓] GRU-attention")
+        print("[✓] GRU-mean")
 
-        self.models['GRU-none'] = GRUClassifier(
-            input_dim=self.input_dim,
-            hidden_dim=128,
-            num_layers=2,
-            dropout=0.2,
-            bidirectional=False,
-            pooling='none',
-            num_classes=self.num_classes
-        )
-        print("[✓] GRU-none")
+        # self.models['CNN1D-adaptive'] = CNN1DClassifier(
+        #     input_dim=self.input_dim,
+        #     num_filters=128,
+        #     kernel_sizes=[3, 5, 7],
+        #     dropout=0.3,
+        #     pooling='adaptive',
+        #     num_classes=self.num_classes
+        # )
+        # print("[✓] CNN-1D-adaptive")
 
-        self.models['CNN1D-adaptive'] = CNN1DClassifier(
-            input_dim=self.input_dim,
-            num_filters=128,
-            kernel_sizes=[3, 5, 7],
-            dropout=0.3,
-            pooling='adaptive',
-            num_classes=self.num_classes
-        )
-        print("[✓] CNN-1D-adaptive")
-
-        self.models['CNN1D-max'] = CNN1DClassifier(
+        self.models['CNN1D'] = CNN1DClassifier(
             input_dim=self.input_dim,
             num_filters=128,
             kernel_sizes=[3, 5, 7],
@@ -182,9 +183,9 @@ class ModelBenchmark:
         self.models['StandardTransformer'] = StandardTransformer(
             input_dim=self.input_dim,
             d_model=128,
-            num_heads=8,
+            num_heads=4,
             num_layers=2,
-            dim_feedforward=256,
+            dim_feedforward=128,
             dropout=0.1,
             max_seq_len=self.max_seq_len,
             num_classes=self.num_classes,
@@ -203,10 +204,10 @@ class ModelBenchmark:
             dropout=0.2,
             bidirectional=False,
             use_time=True,  # 拼接时间特征
-            pooling='attention',
+            pooling='mean',
             num_classes=self.num_classes
         )
-        print("[✓] LSTM + Time Feature")
+        print("[✓] LSTM-mean + Time Feature")
 
         self.models['CNN1D_with_time'] = CNN1DClassifier(
             input_dim=self.input_dim,
@@ -214,10 +215,10 @@ class ModelBenchmark:
             kernel_sizes=[3, 5, 7],
             dropout=0.3,
             use_time=True,
-            pooling='adaptive',
+            pooling='max',
             num_classes=self.num_classes
         )
-        print("[✓] CNN-1D + Time Feature")
+        print("[✓] CNN-1D-max + Time Feature")
 
         print(f"共添加 {len(self.models)} 个基线模型\n")
 
@@ -230,20 +231,20 @@ class ModelBenchmark:
         # 1. 无时间感知（use_time_encoding=False）
         config_no_time = copy.deepcopy(base_config)
         config_no_time['model']['use_time_encoding'] = False
-        self.models['Ours_NoTime'] = Stage1TimeAwareTransformer(
+        self.models['Ours_PositionOnly'] = Stage1TimeAwareTransformer(
             input_dim=self.input_dim,
             cfg=config_no_time
         )
-        print("[✓] Ours - No Time Awareness")
+        print("[✓] Ours - No Time Awareness - PositionOnly")
 
         # 2. 无位置编码（use_positional_encoding=False）
         config_no_pos = copy.deepcopy(base_config)
         config_no_pos['model']['use_positional_encoding'] = False
-        self.models['Ours_NoPos'] = Stage1TimeAwareTransformer(
+        self.models['Ours_TimeOnly'] = Stage1TimeAwareTransformer(
             input_dim=self.input_dim,
             cfg=config_no_pos
         )
-        print("[✓] Ours - No Position Encoding")
+        print("[✓] Ours - No Position Encoding - TimeOnly")
 
         # 3. 无时间、无位置（纯内容）
         config_none = copy.deepcopy(base_config)
@@ -570,7 +571,7 @@ class ModelBenchmark:
 
         return metrics
 
-    def run_all(self, num_epochs: int = 50) -> Dict[str, Any]:
+    def run_all(self, num_epochs: int = 50, seed: int = 42) -> Dict[str, Any]:
         """
         运行所有模型的训练和评估
 
@@ -580,13 +581,13 @@ class ModelBenchmark:
         print("\n" + "=" * 70)
         print("开始模型对比实验")
         print("=" * 70)
-
         all_results = {}
 
         for model_name, model in self.models.items():
             print(f"\n{'─' * 50}")
             print(f"训练模型: {model_name}")
             print(f"{'─' * 50}")
+            set_seed(seed)
 
             start_time = time.time()
 

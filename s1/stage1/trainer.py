@@ -17,6 +17,7 @@ import seaborn as sns
 import numpy as np
 import warnings
 import optuna
+from sklearn.metrics import f1_score, precision_score, recall_score
 
 from torch import nn
 
@@ -85,6 +86,7 @@ def train_model(
     # train_labels = collect_train_labels(loaders["train"]) train 在 pipeline中已经进行了WeightedRandomSampler，所以比例已经基本平均了
     alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
 
+    print(f"[INFO] trainer.py ------ train_model-------alpha = {alpha} & gamma={gamma} & label_smoothing={label_smoothing}")
     # criterion = FocalLoss(alpha=alpha, gamma=gamma)
     # 使用FocalLossWithLabelSmoothing作为损失函数
     criterion = FocalLossWithLabelSmoothing(
@@ -96,7 +98,7 @@ def train_model(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # 添加学习率调度器
-    warmup_epochs = min(10, epochs // 10)
+    warmup_epochs = max(1, min(20, epochs // 10))
     warmup_scheduler = LinearLR(
         optimizer,
         start_factor=0.1,
@@ -135,15 +137,17 @@ def train_model(
 
         score = float(val_metrics.get(monitor, val_metrics.get("macro_f1", 0.0)))
 
-        print(
-            f"[Epoch {epoch:03d}] "
-            f"train_loss={train_loss:.6f} "
-            f"val_loss={val_metrics['loss']:.6f} "
-            f"val_accuracy={val_metrics['accuracy']:.4f} "
-            f"val_macro_f1={val_metrics['macro_f1']:.4f} "
-            f"val_weighted_f1={val_metrics['weighted_f1']:.4f}"
-            f"val_auc={val_metrics['auc']:.4f}"
-        )
+        if (epoch + 1) % 5 == 0:
+            print(
+                f"[Epoch {epoch:03d}] "
+                f"train_loss={train_loss:.6f} "
+                f"val_loss={val_metrics['loss']:.6f} "
+                f"val_accuracy={val_metrics['accuracy']:.4f} "
+                f"val_macro_f1={val_metrics['macro_f1']:.4f} "
+                f"val_weighted_f1={val_metrics['weighted_f1']:.4f}"
+                f"val_auc={val_metrics['auc']:.4f}"
+                f"{'*' if score > best_score else ''}"
+            )
 
         if score > best_score:
             best_score = score
@@ -584,9 +588,9 @@ def find_optimal_threshold(model, val_loader, device, class_idx=1):
     for threshold in thresholds:
         y_pred = (y_scores >= threshold).astype(int)
 
-        precision = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_pred == 1) + 1e-8)
-        recall = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_true == 1) + 1e-8)
-        f1 = 2 * precision * recall / (precision + recall + 1e-8)
+        precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
+        recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
+        f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
 
         results.append({
             'threshold': threshold,
@@ -594,6 +598,16 @@ def find_optimal_threshold(model, val_loader, device, class_idx=1):
             'precision': precision,
             'recall': recall,
         })
+        # precision = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_pred == 1) + 1e-8)
+        # recall = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_true == 1) + 1e-8)
+        # f1 = 2 * precision * recall / (precision + recall + 1e-8)
+        #
+        # results.append({
+        #     'threshold': threshold,
+        #     'f1': f1,
+        #     'precision': precision,
+        #     'recall': recall,
+        # })
 
     # 选择F1最高的阈值
     best_result = max(results, key=lambda x: x['f1'])
