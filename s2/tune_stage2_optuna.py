@@ -842,11 +842,14 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# !python tune_stage2_optuna.py \
-#   --stage1_dir "/content/drive/MyDrive/my_project/stage1_output" \
-#   --config "/content/drive/MyDrive/my_project/stage2_config _0619.yaml" \
-#   --out_dir "/content/drive/MyDrive/my_project/stage2_optuna_results" \
-#   --study_name "stage2_transformer_v1" \
+# !pip -q install optuna
+
+
+# !python /content/drive/MyDrive/s2/tune_stage2_optuna.py \
+#   --stage1_dir /content/drive/MyDrive/s1/tensors_ar_002 \
+#   --config /content/drive/MyDrive/s2/stage2_config_0619.yaml \
+#   --out_dir /content/drive/MyDrive/s2/stage2_optuna_0619 \
+#   --study_name stage2_transformer_v1 \
 #   --n_trials 30 \
 #   --max_epochs 35 \
 #   --patience 6 \
