@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--study_name", default="stage1_transformer_hpo")
 
     # 新增：HPO 加速相关参数
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--save_trial_config", action="store_true")
     parser.add_argument("--empty_cache_every", type=int, default=10)
