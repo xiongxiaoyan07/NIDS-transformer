@@ -72,9 +72,9 @@ training:
   # threshold
   threshold: 0.5
   auto_threshold: true
-  threshold_metric: f1  # f1 / recall / precision
+  threshold_metric: macro_f1  # f1 / recall / precision
   threshold_min: 0.01
   threshold_max: 0.99
-  threshold_steps: 99
+  threshold_steps: 199
 
   device: auto

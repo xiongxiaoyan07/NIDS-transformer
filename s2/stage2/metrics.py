@@ -13,7 +13,7 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
     precision_recall_fscore_support,
-    roc_auc_score,
+    roc_auc_score, average_precision_score,
 )
 
 
@@ -99,8 +99,10 @@ def classification_metrics(y_true, y_pred, y_score, loss=None, threshold=None, n
             # 二分类：使用类别1的概率 (y_score[:, 1])
             if y_score.shape[1] >= 2:
                 auc = float(roc_auc_score(y_true, y_score[:, 1]))
+                pr_auc = float(average_precision_score(y_true, y_score[:, 1]))
             else:
                 auc = float(roc_auc_score(y_true, y_score.ravel()))
+                pr_auc = float(average_precision_score(y_true, y_score.ravel()))
         else:
             # 多分类：使用 OvR
             auc = float(roc_auc_score(
@@ -110,12 +112,14 @@ def classification_metrics(y_true, y_pred, y_score, loss=None, threshold=None, n
                 average='macro',
                 labels=list(range(num_classes))
             ))
+            pr_auc = float(average_precision_score(y_true, y_score, average='macro'))
     except Exception as e:
         print(f"[WARNING] AUC calculation failed: {e}")
         # 打印调试信息
         print(f"  y_true shape: {y_true.shape}, unique: {np.unique(y_true)}")
         print(f"  y_score shape: {y_score.shape}")
         auc = 0.0
+        pr_auc = 0.0
 
     # ============ 混淆矩阵 ============
     cm = confusion_matrix(y_true, y_pred)
@@ -133,6 +137,7 @@ def classification_metrics(y_true, y_pred, y_score, loss=None, threshold=None, n
         'recall_label1': recall_label1,
         'f1_label1': f1_label1,
         'auc': auc,
+        'pr_auc': pr_auc,
         'per_class_f1': per_class_f1,
         'confusion_matrix': cm.tolist(),
         'num_classes': num_classes,

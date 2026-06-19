@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from .dataset import Stage2Dataset, stage2_collate_fn
 from .losses import compute_class_alpha,FocalLossWithLabelSmoothing
-from .utils import binary_metrics, metric_value, save_json
+from .utils import metric_value, save_json, worker_init_fn
 from .metrics import classification_metrics
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
@@ -62,6 +62,7 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
     batch_size = int(train_cfg.get("batch_size", 64))
     num_workers = int(train_cfg.get("num_workers", 0))
 
+    # 不要同时使用 WeightedRandomSampler 和类别加权 Focal Loss 当前配置:use_weighted_sampler = False
     if bool(train_cfg.get("use_weighted_sampler", True)):
         labels = dataset.labels.astype(int)
         counts = np.bincount(labels, minlength=2).astype(np.float64)
@@ -69,10 +70,12 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
         class_weights = 1.0 / counts
         sample_weights = class_weights[labels]
 
+
         sampler = WeightedRandomSampler(
             weights=torch.tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),
             replacement=True,
+            generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))), # 固定种子
         )
         print(f"[INFO] weighted sampler class_counts: {counts.astype(int).tolist()}")
 
@@ -82,7 +85,9 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
             sampler=sampler,
             num_workers=num_workers,
             collate_fn=stage2_collate_fn,
+            worker_init_fn=worker_init_fn,
             pin_memory=torch.cuda.is_available(),
+            generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
         )
 
     return DataLoader(
@@ -90,8 +95,10 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        worker_init_fn=worker_init_fn,
         collate_fn=stage2_collate_fn,
         pin_memory=torch.cuda.is_available(),
+        generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
     )
 
 def make_eval_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader:
@@ -101,8 +108,10 @@ def make_eval_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader:
         batch_size=int(train_cfg.get("batch_size", 64)),
         shuffle=False,
         num_workers=int(train_cfg.get("num_workers", 0)),
+        worker_init_fn=worker_init_fn,
         collate_fn=stage2_collate_fn,
         pin_memory=torch.cuda.is_available(),
+        generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
     )
 
 def train_one_epoch(
@@ -112,9 +121,10 @@ def train_one_epoch(
     loss_fn: nn.Module,
     device: torch.device,
     grad_clip_norm: Optional[float],
+    scaler: Optional[torch.cuda.amp.GradScaler],
 ) -> float:
     model.train()
-    total_loss = 0.0
+    total_loss = torch.zeros((), device=device, dtype=torch.float32)
     total_n = 0
 
     for batch in loader:
@@ -123,28 +133,35 @@ def train_one_epoch(
         y = batch["label"].to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        logits = model(x, mask)
-        loss = loss_fn(logits, y)
-        loss.backward()
+        with torch.amp.autocast('cuda'):
+            logits = model(x, mask)
+            loss = loss_fn(logits, y)
+        scaler.scale(loss).backward()
+        # loss.backward()
 
         if grad_clip_norm is not None and grad_clip_norm > 0:
+            scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
 
-        optimizer.step()
+        # optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
-        bs = y.size(0)
-        total_loss += float(loss.item()) * bs
+        bs = int(y.size(0))
+        total_loss += loss.detach().float() * bs
         total_n += bs
 
-    return total_loss / max(total_n, 1)
+    return float((total_loss / max(total_n, 1)).item())
 
-@torch.no_grad()
+@torch.inference_mode()
 def evaluate(
     model: nn.Module,
     loader: DataLoader,
     loss_fn: nn.Module,
     device: torch.device,
     threshold: Optional[float] = 0.5,
+    return_predictions: bool = True,
+    amp_enabled=False, amp_dtype=torch.float16
 ) -> Tuple[Dict[str, Any], pd.DataFrame]:
     model.eval()
 
@@ -161,7 +178,11 @@ def evaluate(
         mask = batch["mask"].to(device, non_blocking=True)
         y = batch["label"].to(device, non_blocking=True)
 
-        with torch.no_grad():
+        with torch.autocast(
+                device_type=device.type,
+                dtype=amp_dtype,
+                enabled=amp_enabled,
+        ):
             logits = model(x, mask)
             loss = loss_fn(logits, y)
 
@@ -175,16 +196,16 @@ def evaluate(
                 preds = (score_label1 >= float(threshold)).long()
 
         losses.append(float(loss.item()) * y.size(0))
-        all_y.append(y.detach().cpu().numpy())
-        all_pred.append(preds.detach().cpu().numpy())
-        all_score.append(score_label1.detach().cpu().numpy())
+        all_y.append(y.detach())
+        all_pred.append(preds.detach())
+        all_score.append(score_label1.detach())
         all_flow_ids.extend(batch["flow_id"].cpu().numpy().tolist())
         total_loss += loss.item()
         num_batches += 1
 
-    y_true = np.concatenate(all_y, axis=0)
-    y_pred = np.concatenate(all_pred, axis=0)
-    y_score = np.concatenate(all_score, axis=0)
+    y_true = torch.cat(all_y).cpu().numpy()
+    y_pred = torch.cat(all_pred).cpu().numpy()
+    y_score = torch.cat(all_score).cpu().numpy()
     avg_loss = total_loss / num_batches
 
     metrics = classification_metrics(
@@ -209,8 +230,10 @@ def evaluate(
             "pred": y_pred.astype(int),
         }
     )
-
-    return metrics, pred_df
+    if return_predictions:
+        return metrics, pred_df
+    else:
+        return metrics
 
 def find_best_threshold(
     y_true: np.ndarray,
@@ -243,6 +266,8 @@ def find_best_threshold(
             value = metrics["recall_label1"]
         elif metric == "precision":
             value = metrics["precision_label1"]
+        elif metric == "macro_f1":
+            value = metrics["macro_f1"]
         else:
             raise ValueError(f"Unknown threshold_metric: {metric}")
 
@@ -278,11 +303,26 @@ class Stage2Trainer:
         }
 
         self.loss_fn = make_loss_fn(datasets["train"].labels, cfg, device)
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=float(cfg["training"].get("lr", 3e-4)),
-            weight_decay=float(cfg["training"].get("weight_decay", 1e-4)),
-        )
+
+        optimizer_kwargs = {
+            "lr": float(cfg["training"].get("lr", 3e-4)),
+            "weight_decay": float(cfg["training"].get("weight_decay", 1e-4)),
+        }
+
+        if device.type == "cuda":
+            optimizer_kwargs["fused"] = True
+
+        try:
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                **optimizer_kwargs,
+            )
+        except (TypeError, RuntimeError):
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=float(cfg["training"].get("lr", 3e-4)),
+                weight_decay=float(cfg["training"].get("weight_decay", 1e-4)),
+            )
     # train model
     def fit(self) -> Dict[str, Any]:
         epochs = int(self.cfg["training"].get("epochs", 100))
@@ -296,7 +336,7 @@ class Stage2Trainer:
 
         # 你的原代码 warmup_epochs = min(10, epochs // 10)。
         # 这里加 max(1, ...) 防止 epochs 较小时 warmup_epochs=0。
-        warmup_epochs = max(1, min(10, epochs // 10))
+        warmup_epochs = max(1, min(20, epochs // 10))
         print("[Stage2Trainer] ---- fit ------warmup_epochs = ", warmup_epochs)
         cosine_epochs = max(1, epochs - warmup_epochs)
 
@@ -321,6 +361,7 @@ class Stage2Trainer:
             milestones=[warmup_epochs],
         )
 
+        scaler = torch.amp.GradScaler('cuda')
         best_score = -float("inf")
         best_epoch = -1
         bad_epochs = 0
@@ -334,23 +375,36 @@ class Stage2Trainer:
                 loss_fn=self.loss_fn,
                 device=self.device,
                 grad_clip_norm=grad_clip_norm,
+                scaler=scaler
             )
 
             scheduler.step()
 
-            metrics_by_split: Dict[str, Dict[str, Any]] = {}
-            for split, loader in self.eval_loaders.items():
-                metrics, _ = evaluate(
-                    model=self.model,
-                    loader=loader,
-                    loss_fn=self.loss_fn,
-                    device=self.device,
-                    threshold=threshold,
-                )
-                metrics_by_split[split] = metrics
+            metrics_by_split = {}
+
+            metrics = evaluate(
+                model=self.model,
+                loader=self.eval_loaders["val"],
+                loss_fn=self.loss_fn,
+                device=self.device,
+                threshold=threshold,
+                return_predictions=False
+            )
+
+            metrics_by_split["val"] = metrics
+            # for split, loader in self.eval_loaders.items():
+            #     metrics, _ = evaluate(
+            #         model=self.model,
+            #         loader=loader,
+            #         loss_fn=self.loss_fn,
+            #         device=self.device,
+            #         threshold=threshold,
+            #     )
+            #     metrics_by_split[split] = metrics
 
             score = metric_value(metrics_by_split, metric_for_best)
-            improved = score > best_score
+            min_delta = float(self.cfg["training"].get("min_delta", 0.0))
+            improved = score > best_score + min_delta
             if improved:
                 best_score = score
                 best_epoch = epoch

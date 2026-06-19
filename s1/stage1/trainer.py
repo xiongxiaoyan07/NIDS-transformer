@@ -248,6 +248,39 @@ def train_model(
         "test_metrics": test_metrics,
     }
 
+def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
+    model.train()
+
+    total_loss = 0.0
+    total_count = 0
+
+    for batch in loader:
+        x = batch["x"].to(device)
+        t = batch["time"].to(device)
+        mask = batch["mask"].to(device)
+        y = batch["label"].to(device)
+
+        # 获取flow_feats（如果存在）
+        flow_feats = batch.get("flow_feats")
+        if flow_feats is not None:
+            flow_feats = flow_feats.to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        # 调用模型时传入flow_feats
+        logits = model(x, t, mask, flow_feats=flow_feats)
+        loss = criterion(logits, y)
+
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        total_loss += float(loss.item()) * x.size(0)
+        total_count += x.size(0)
+
+    return total_loss / max(total_count, 1)
+
+
 def train_model_for_optuna(
     model: torch.nn.Module,
     loaders: Dict[str, Any],
@@ -456,39 +489,6 @@ def _plot_threshold_search(results, out_dir):
 
     plt.savefig(f"{out_dir}/threshold_optimization.png", dpi=150, bbox_inches='tight')
     plt.close()
-
-def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
-    model.train()
-
-    total_loss = 0.0
-    total_count = 0
-
-    for batch in loader:
-        x = batch["x"].to(device)
-        t = batch["time"].to(device)
-        mask = batch["mask"].to(device)
-        y = batch["label"].to(device)
-
-        # 获取flow_feats（如果存在）
-        flow_feats = batch.get("flow_feats")
-        if flow_feats is not None:
-            flow_feats = flow_feats.to(device)
-
-        optimizer.zero_grad(set_to_none=True)
-
-        # 调用模型时传入flow_feats
-        logits = model(x, t, mask, flow_feats=flow_feats)
-        loss = criterion(logits, y)
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-
-        total_loss += float(loss.item()) * x.size(0)
-        total_count += x.size(0)
-
-    return total_loss / max(total_count, 1)
-
 
 @torch.no_grad()
 def evaluate_model(

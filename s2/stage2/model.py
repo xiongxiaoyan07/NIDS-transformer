@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List, Optional
 
 import numpy as np
 import torch
@@ -121,7 +121,7 @@ class AttentionPooling(nn.Module):
 
     def forward(self, h: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         scores = self.score(h).squeeze(-1)
-        scores = scores.masked_fill(~mask, -1e9)
+        scores = scores.masked_fill(~mask, -1e4)
         weights = torch.softmax(scores, dim=1)
         return torch.sum(h * weights.unsqueeze(-1), dim=1)
 
@@ -335,6 +335,158 @@ class Stage2LSTM(nn.Module):
         return self.cls_head(pooled)
 
 
+class Stage2CNNLSTM(nn.Module):
+    """
+    CNN+LSTM Baseline for Stage 2
+
+    动机：
+    1. CNN 捕捉局部 n-gram 流模式
+    2. LSTM 捕捉长距离时序依赖
+    3. 是时间序列分类的强基线
+    """
+
+    def __init__(
+            self,
+            d_model: int,
+            num_layers: int = 2,
+            dropout: float = 0.1,
+            pooling: str = "last",
+            cls_head: List[int] = [128, 64],
+            activation: str = "gelu",
+            class_alpha: Optional[torch.Tensor] = None,
+
+            # CNN specific
+            cnn_kernel_sizes: List[int] = [3, 5, 7],
+            cnn_out_channels: int = 128,
+            lstm_hidden_size: Optional[int] = None,
+            lstm_num_layers: int = 2,
+    ):
+        super().__init__()
+        self.pooling = pooling
+
+        # Multi-scale CNN
+        self.convs = nn.ModuleList([
+            nn.Conv1d(d_model, cnn_out_channels, k, padding=k // 2)
+            for k in cnn_kernel_sizes
+        ])
+
+        # Nonlinear projection
+        cnn_total = cnn_out_channels * len(cnn_kernel_sizes)
+        self.cnn_project = nn.Sequential(
+            nn.Linear(cnn_total, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        # LSTM encoder
+        lstm_hidden = lstm_hidden_size or d_model
+        self.lstm = nn.LSTM(
+            input_size=d_model,
+            hidden_size=lstm_hidden,
+            num_layers=lstm_num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=dropout if lstm_num_layers > 1 else 0,
+        )
+
+        # 输出维度 × 2 (bidirectional)
+        lstm_output_dim = lstm_hidden * 2
+        self.proj = nn.Linear(lstm_output_dim, d_model) if lstm_output_dim != d_model else nn.Identity()
+
+        # Pooling
+        if pooling == "attention":
+            self.pooler = AttentionPooling(d_model)
+        else:
+            self.pooler = None
+
+        # Classification head
+        self.classifier = self._build_classifier(d_model, cls_head, dropout, activation)
+
+        # Class balancing
+        self.class_alpha = class_alpha
+
+    def _build_classifier(self, d_model, cls_head, dropout, activation):
+        layers = []
+        in_dim = d_model
+        for h_dim in cls_head:
+            layers.append(nn.Linear(in_dim, h_dim))
+            if activation == "gelu":
+                layers.append(nn.GELU())
+            else:
+                layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout))
+            in_dim = h_dim
+        layers.append(nn.Linear(in_dim, 1))
+        return nn.Sequential(*layers)
+
+    def forward(self, context_z, mask, return_logits=False):
+        """
+        context_z: [B, L, d_model]
+        mask: [B, L]
+        """
+        B, L, D = context_z.shape
+
+        # 1. Pad mask for CNN
+        valid_mask = mask.unsqueeze(-1).float()  # [B, L, 1]
+
+        # 2. CNN feature extraction
+        z = context_z * valid_mask
+        z_t = z.transpose(1, 2)  # [B, D, L]
+
+        conv_outputs = []
+        for conv in self.convs:
+            conv_out = conv(z_t)  # [B, C, L]
+            conv_out = conv_out.transpose(1, 2)  # [B, L, C]
+            conv_outputs.append(conv_out)
+
+        # Concatenate multi-scale features
+        z = torch.cat(conv_outputs, dim=-1)  # [B, L, C_total]
+
+        # Project back to d_model
+        z = self.cnn_project(z)  # [B, L, d_model]
+        z = z * valid_mask  # Re-apply mask
+
+        # 3. Pack for LSTM
+        lengths = mask.sum(dim=1).cpu()
+        nonzero_mask = lengths > 0
+        if not nonzero_mask.all():
+            z = z[nonzero_mask]
+            lengths = lengths[nonzero_mask]
+            valid_mask = valid_mask[nonzero_mask]
+
+        packed = pack_padded_sequence(
+            z, lengths, batch_first=True, enforce_sorted=False
+        )
+        lstm_out, _ = self.lstm(packed)
+
+        # Back to dense but with original order
+        z_dense, _ = pad_packed_sequence(
+            lstm_out, batch_first=True, total_length=L
+        )
+        z_dense = z_dense * valid_mask
+
+        # Project if needed
+        z_dense = self.proj(z_dense)
+
+        # 4. Pooling
+        if self.pooling == "last":
+            lengths = mask.sum(dim=1).long()
+            lengths = torch.clamp(lengths - 1, min=0)
+            z_pooled = z_dense[torch.arange(len(z_dense)), lengths]
+        elif self.pooling == "mean":
+            z_pooled = (z_dense * valid_mask).sum(1) / valid_mask.sum(1).clamp(min=1)
+        elif self.pooling == "attention":
+            z_pooled = self.pooler(z_dense, mask)
+        else:
+            raise ValueError(f"Unknown pooling: {self.pooling}")
+
+        # 5. Classification
+        logits = self.classifier(z_pooled).squeeze(-1)
+
+        if return_logits:
+            return logits
+        return torch.sigmoid(logits)
 
 class Stage2Transformer(nn.Module):
     def __init__(self, cfg: Dict[str, Any], input_dim: int):

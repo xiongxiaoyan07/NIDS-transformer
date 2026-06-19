@@ -18,13 +18,90 @@ from sklearn.metrics import (
 )
 
 
-def set_seed(seed: int) -> None:
+def set_seed(seed: int = 42, deterministic=True):
+    """
+    Set random seeds for full reproducibility.
+
+    关键点：
+    1. Python random + numpy + PyTorch 全覆盖
+    2. cudnn deterministic 模式（略微降低性能但保证可复现）
+    3. 环境变量设置
+    """
+
+    # Python
     random.seed(seed)
+
+    # NumPy
     np.random.seed(seed)
+
+    # PyTorch
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = False
-    torch.backends.cudnn.benchmark = True
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # multi-GPU
+
+    # CuDNN
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+        # 注意：某些 CUDA 操作在 deterministic 模式下可能变慢
+        # 但这是可复现性的代价
+    else:
+        torch.backends.cudnn.benchmark = True
+
+    # 环境变量
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # 允许 CuBLAS 确定性
+
+    # PyTorch 2.0+ 的确定性算法（需要 CUDA 10.2+）
+    if hasattr(torch, 'use_deterministic_algorithms'):
+        torch.use_deterministic_algorithms(True)
+
+    print(f"[INFO] 随机种子已设置: {seed}")
+
+
+class SeedContext:
+    """
+    Context manager for temporary seed changes
+
+    用法：
+    with SeedContext(42):
+        # 这段代码的随机性由 seed 42 控制
+        train_model()
+    # 离开 context 后恢复原来的随机状态
+    """
+
+    def __init__(self, seed: int):
+        self.seed = seed
+        self.state = None
+
+    def __enter__(self):
+        self.state = {
+            'python': random.getstate(),
+            'numpy': np.random.get_state(),
+            'torch': torch.get_rng_state(),
+            'cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        }
+        set_seed(self.seed)
+        return self
+
+    def __exit__(self, *args):
+        if self.state:
+            random.setstate(self.state['python'])
+            np.random.set_state(self.state['numpy'])
+            torch.set_rng_state(self.state['torch'])
+            if self.state['cuda']:
+                torch.cuda.set_rng_state_all(self.state['cuda'])
+
+def worker_init_fn(worker_id: int):
+    """
+    DataLoader worker 的初始化函数
+    确保每个 worker 的随机状态是可确定的
+    """
+    # 基于 worker_id 和基础种子生成 worker 特定的种子
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 def safe_mkdir(path: str) -> None:
     os.makedirs(path, exist_ok=True)

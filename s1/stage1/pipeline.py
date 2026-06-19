@@ -275,6 +275,7 @@ def build_dataloaders(
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
+            generator=torch.Generator().manual_seed(seed),  # 固定种子
         ),
         # 修正在保存stage2需要的z和meta info时，在train中出现重复flow问题，这里和run_stage1.py中loader=loaders["trainNoSampler"], 相对应（line261）
         "trainNoSampler": DataLoader(
@@ -285,6 +286,7 @@ def build_dataloaders(
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
+            generator=torch.Generator().manual_seed(seed),  # 固定种子
         ),
         "val": DataLoader(
             datasets["val"],
@@ -294,6 +296,7 @@ def build_dataloaders(
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
+            generator=torch.Generator().manual_seed(seed),  # 固定种子
         ),
         "test": DataLoader(
             datasets["test"],
@@ -303,6 +306,7 @@ def build_dataloaders(
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
             pin_memory=True,
+            generator=torch.Generator().manual_seed(seed),  # 固定种子
         ),
     }
 

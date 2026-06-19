@@ -19,7 +19,9 @@ class Stage2Dataset(Dataset):
         # reset_index 重置索引，保证 dataframe 的行号---->z_sorted[idx]、context_indices[idx]、meta_df.iloc[idx] 能严格对应
         self.meta_df = meta_df_sorted.reset_index(drop=True)
         # z_sorted 每条 flow 对应的 Stage1 embedding
-        self.z = z_sorted.astype(np.float32)
+        # self.z = z_sorted.astype(np.float32)
+        z_np = np.ascontiguousarray(z_sorted, dtype=np.float32)
+        self.z = torch.from_numpy(z_np)
         # context_indices 每条 flow 的上下文 flow 索引
         # self.context_indices[3] = np.array([1, 3]) 表示第3条flow的上下文是第1条和第3条flow。
         self.context_indices = context_indices
@@ -46,7 +48,7 @@ class Stage2Dataset(Dataset):
             context_z = self.z[ctx_idx]
 
         return {
-            "context_z": torch.from_numpy(context_z).float(),
+            "context_z": torch.as_tensor(context_z).float(),
             "mask": torch.ones(len(ctx_idx), dtype=torch.bool),
             # "label": torch.tensor(int(self.meta_df.at[row_idx, "label"]), dtype=torch.long),
             "label": torch.tensor(int(self.labels[i]), dtype=torch.long),

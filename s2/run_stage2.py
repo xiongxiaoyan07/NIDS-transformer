@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
         help="Override context.window_size",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Override seed",
+    )
+    parser.add_argument(
         "--epochs",
         type=int,
         default=None,
@@ -124,6 +130,8 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[s
         cfg["training"]["epochs"] = args.epochs
     if args.batch_size is not None:
         cfg["training"]["batch_size"] = args.batch_size
+    if args.seed is not None:
+        cfg["seed"] = args.seed
     if args.model_pooling is not None:
         cfg["model"]["pooling"] = args.model_pooling
     if args.cls_head is not None:
@@ -182,7 +190,10 @@ def main() -> None:
 
     safe_mkdir(args.out_dir)
     save_config(cfg, os.path.join(args.out_dir, "stage2_config_used.yaml"))
-
+    print(
+        f"[INFO] Stage2 --------- seed: "
+        f"{int(cfg.get('seed', 42))}"
+    )
     set_seed(int(cfg.get("seed", 42)))
     device = get_device(cfg["training"].get("device", "auto"))
     print(f"[INFO] Stage2 --------- device: {device}")

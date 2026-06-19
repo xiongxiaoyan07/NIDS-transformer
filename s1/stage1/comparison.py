@@ -292,6 +292,14 @@ class ModelBenchmark:
         print(f"{'@' * 50}")
         model = model.to(self.device)
 
+        # ---------- 模型编译（PyTorch 2.0+） ----------
+        if hasattr(torch, 'compile') and self.device == 'cuda':
+            try:
+                model = torch.compile(model, mode="reduce-overhead", dynamic=False)
+                print(f"[{model_name}] 已启用 torch.compile (reduce-overhead)")
+            except Exception as e:
+                print(f"[{model_name}] torch.compile 失败: {e}，使用普通模式")
+
         # 计算类别权重（处理不平衡）
         alpha = self._compute_class_weights()
 
@@ -317,31 +325,35 @@ class ModelBenchmark:
         patience_counter = 0
         history = {'train_loss': [], 'val_loss': [], 'val_f1_class1': []}
 
+        # 在 train_deep_model 的最开始（optimizer 定义之后）初始化 GradScaler
+        scaler = torch.cuda.amp.GradScaler(enabled=(self.device == 'cuda'))
+
         for epoch in range(num_epochs):
-            # 训练阶段
             model.train()
             train_loss = 0.0
             for batch in self.train_loader:
-                x = batch['x'].to(self.device)
+                x = batch['x'].to(self.device, non_blocking=True)  # 🚀 开启 non_blocking
                 mask = batch.get('mask', None)
-                if mask is not None:
-                    mask = mask.to(self.device)
+                if mask is not None: mask = mask.to(self.device, non_blocking=True)
                 time_log = batch.get('time', None)
-                if time_log is not None:
-                    time_log = time_log.to(self.device)
+                if time_log is not None: time_log = time_log.to(self.device, non_blocking=True)
                 flow_feats = batch.get('flow_feats', None)
-                if flow_feats is not None:
-                    flow_feats = flow_feats.to(self.device)
-                labels = batch['label'].to(self.device)
+                if flow_feats is not None: flow_feats = flow_feats.to(self.device, non_blocking=True)
+                labels = batch['label'].to(self.device, non_blocking=True)
 
-                optimizer.zero_grad()
-                logits = model(x, mask=mask, time_log=time_log, flow_feats=flow_feats)
-                loss = criterion(logits, labels)
-                loss.backward()
+                optimizer.zero_grad(set_to_none=True)  # 🚀 set_to_none=True 比 zero_grad() 更快
 
-                # 梯度裁剪
+                # 🚀 使用混合精度向前传播
+                with torch.cuda.amp.autocast(enabled=(self.device == 'cuda')):
+                    logits = model(x, mask=mask, time_log=time_log, flow_feats=flow_feats)
+                    loss = criterion(logits, labels)
+
+                # 🚀 混合精度反向传播
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
 
                 train_loss += loss.item()
 
@@ -383,13 +395,16 @@ class ModelBenchmark:
     def train_ml_model(
             self,
             model,
-            model_name: str
+            model_name: str,
+            x_train=None, y_train=None,
+            x_val=None, y_val=None
     ) -> Dict[str, Any]:
         """训练传统机器学习模型（XGBoost/LightGBM/Random Forest）"""
 
         # 准备数据：聚合包特征 + 流特征
-        X_train, y_train = self._prepare_flow_level_data(self.train_loader)
-        X_val, y_val = self._prepare_flow_level_data(self.val_loader)
+        if x_train is None:
+            x_train, y_train = self._prepare_flow_level_data(self.train_loader)
+            x_val, y_val = self._prepare_flow_level_data(self.val_loader)
 
         if model_name == 'XGBoost':
             # 计算样本权重（处理不平衡）
@@ -404,8 +419,8 @@ class ModelBenchmark:
                 random_state=42
             )
             model.fit(
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
+                x_train, y_train,
+                eval_set=[(x_val, y_val)],
                 # early_stopping_rounds=20,
                 verbose=False
             )
@@ -422,8 +437,8 @@ class ModelBenchmark:
                 random_state=42
             )
             model.fit(
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
+                x_train, y_train,
+                eval_set=[(x_val, y_val)],
                 callbacks=[lgb.early_stopping(20), lgb.log_evaluation(0)]
             )
         elif model_name == 'RandomForest':
@@ -438,7 +453,7 @@ class ModelBenchmark:
                 random_state=42,
                 n_jobs=-1
             )
-            model.fit(X_train, y_train)
+            model.fit(x_train, y_train)
 
         return model
 
@@ -536,13 +551,16 @@ class ModelBenchmark:
             self,
             model,
             loader: DataLoader,
-            model_name: str
+            model_name: str,
+            x,
+            y
     ) -> Dict[str, Any]:
         """评估传统机器学习模型"""
-        X, y = self._prepare_flow_level_data(loader)
+        if x is None:
+            x, y = self._prepare_flow_level_data(loader)
 
         # 预测
-        probs = model.predict_proba(X)
+        probs = model.predict_proba(x)
         if probs.shape[1] == 2:
             scores = probs[:, 1]
         else:
@@ -583,6 +601,13 @@ class ModelBenchmark:
         print("=" * 70)
         all_results = {}
 
+        #【优化 1】提前预分配和缓存传统 ML 所需的流级数据，避免循环内重复遍历 DataLoader
+        print("[INFO] 正在预缓存流级数据...")
+        x_train, y_train = self._prepare_flow_level_data(self.train_loader)
+        x_val, y_val = self._prepare_flow_level_data(self.val_loader)
+        x_test, y_test = self._prepare_flow_level_data(self.test_loader)
+        print("[INFO] 流级数据缓存完成。")
+
         for model_name, model in self.models.items():
             print(f"\n{'─' * 50}")
             print(f"训练模型: {model_name}")
@@ -594,11 +619,11 @@ class ModelBenchmark:
             # 判断模型类型
             if model_name in ['XGBoost', 'LightGBM', 'RandomForest']:
                 # 传统机器学习模型
-                model = self.train_ml_model(model, model_name)
-
+                model = self.train_ml_model(model, model_name, x_train, y_train, x_val, y_val)
+                training_time = time.time() - start_time
                 # 评估
-                val_metrics = self.evaluate_ml_model(model, self.val_loader, model_name)
-                test_metrics = self.evaluate_ml_model(model, self.test_loader, model_name)
+                val_metrics = self.evaluate_ml_model(model, self.val_loader, model_name, x_val, y_val)
+                test_metrics = self.evaluate_ml_model(model, self.test_loader, model_name, x_test, y_test)
             else:
                 # 深度学习模型
                 history = self.train_deep_model(
@@ -608,7 +633,7 @@ class ModelBenchmark:
                     weight_decay=1e-4,
                     patience=10
                 )
-
+                training_time = time.time() - start_time
                 # 评估
                 val_metrics = self.evaluate_model(model, self.val_loader)
                 test_metrics = self.evaluate_model(model, self.test_loader, threshold=val_metrics['threshold'])
@@ -616,7 +641,7 @@ class ModelBenchmark:
                 # 保存训练历史
                 val_metrics['training_history'] = history
 
-            training_time = time.time() - start_time
+            # training_time = time.time() - start_time
 
             # 计算模型参数数量
             if hasattr(model, 'parameters'):
@@ -731,23 +756,25 @@ class ModelBenchmark:
 
         return X, y
 
-    def _compute_class_weights(self) -> torch.Tensor:
-        """计算类别权重（处理不平衡）"""
-        all_labels = []
+    def _compute_class_weights(self):
+        if hasattr(self, "_cached_alpha"):
+            return self._cached_alpha
+
+        labels = []
         for batch in self.train_loader:
-            all_labels.append(batch['label'].numpy())
-        all_labels = np.concatenate(all_labels, axis=0)
+            labels.append(batch['label'].numpy())
 
-        # 计算每个类别的样本数
-        unique, counts = np.unique(all_labels, return_counts=True)
-        n_samples = len(all_labels)
-        n_classes = len(unique)
+        labels = np.concatenate(labels)
 
-        # 逆频率权重
-        alpha = torch.zeros(n_classes, dtype=torch.float32)
-        for i, count in zip(unique, counts):
-            alpha[i] = n_samples / (n_classes * count)
+        unique, counts = np.unique(labels, return_counts=True)
+        n = len(labels)
+        k = len(unique)
 
+        alpha = torch.zeros(k, dtype=torch.float32)
+        for i, c in zip(unique, counts):
+            alpha[i] = n / (k * c)
+
+        self._cached_alpha = alpha
         return alpha
 
     def _find_optimal_threshold(

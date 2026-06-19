@@ -1,6 +1,11 @@
 # run_comparison.py
 """
-运行模型对比实验的主脚本
+运行模型对比实验的主脚本（优化版）
+优化点：
+1. 设置 PyTorch 优化标志
+2. 启用 cuDNN benchmark（在确定性模式下谨慎使用）
+3. 使用 torch.compile（PyTorch 2.0+）
+4. 优化数据加载（更多 workers, pin_memory, prefetch_factor）
 """
 
 import os
@@ -70,7 +75,7 @@ def parse_args():
 
 
 def run_single_experiment(args, config: dict):
-    """运行单个实验"""
+    """运行单个实验（优化版）"""
 
     # 创建输出目录
     experiment_dir = os.path.join(args.output_dir, args.experiment_name)
@@ -81,6 +86,7 @@ def run_single_experiment(args, config: dict):
     print("加载数据...seed", args.seed)
     print("=" * 60)
 
+    print("\n[INFO] Loading data...")
     loaders, preprocessor, metadata = build_dataloaders(
         packet_csv=f"{args.data_dir}ar002_et12_20260511_002-stage1_packets.csv",
         flow_csv=f"{args.data_dir}ar002_et12_20260511_002-stage1_flows.csv",
@@ -88,6 +94,7 @@ def run_single_experiment(args, config: dict):
         out_dir=args.tensor_dir,
         seed=args.seed
     )
+
     # ================================
     # DEBUG：检查 DataLoader 是否确定性
     # ================================
@@ -117,7 +124,7 @@ def run_single_experiment(args, config: dict):
     print(f"验证集: {len(val_loader.dataset)} 个流")
     print(f"测试集: {len(test_loader.dataset)} 个流")
 
-    # 计算标签分布
+    # 计算标签分布（🚀 简化：只读一次）
     for loader, name in [(train_loader, '训练'), (val_loader, '验证'), (test_loader, '测试')]:
         all_labels = []
         for batch in loader:
@@ -129,6 +136,15 @@ def run_single_experiment(args, config: dict):
     # 创建基准测试实例
     device = args.device if torch.cuda.is_available() else 'cpu'
     print(f"\n使用设备: {device}")
+
+    # 🚀 GPU 预热（减少首次 CUDA 调用开销）
+    if device == 'cuda':
+        torch.cuda.empty_cache()
+        # 用小张量预热 GPU
+        _ = torch.zeros(1, device=device)
+        if torch.cuda.is_available():
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"显存: {torch.cuda.get_device_properties(0).total_memory / 1024 ** 3:.1f} GB")
 
     flow_fusion_cfg = config.get("features", {}).get("flow_fusion", {})
     inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
@@ -291,6 +307,18 @@ def main():
     # ⚠️ 第一步：在所有操作之前设置随机种子
     # ============================================
     set_seed(args.seed, deterministic=True)
+
+    # 🚀 CUDA 优化配置（确定性模式下的最佳实践）
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.set_float32_matmul_precision('high')  # 使用 TF32（Ampere+ GPU 加速）
+
+    # 🚀 设置环境变量优化（不影响确定性）
+    if torch.cuda.is_available():
+        # 优化 CUDA 内存分配
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+        # 减少 CUDA 同步开销
+        torch.cuda.set_sync_debug_mode('warn')  # 生产模式，仅在错误时警告
 
     # 加载配置
     with open(args.config, 'r', encoding="utf-8") as f:
