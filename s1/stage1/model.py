@@ -256,7 +256,7 @@ class AttentionPooling(nn.Module):
         attn_weights = self.attention(h).squeeze(-1)  # [B, L]
 
         # Set very small weights for padding positions
-        attn_weights = attn_weights.masked_fill(~mask.bool(), 1e4)
+        attn_weights = attn_weights.masked_fill(~mask.bool(), -1e4)
         # attn_weights = attn_weights.masked_fill(~mask.bool(), -1e9)
         attn_weights = torch.softmax(attn_weights, dim=-1).unsqueeze(-1)  # [B, L, 1]
 

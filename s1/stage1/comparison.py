@@ -679,6 +679,82 @@ class ModelBenchmark:
         self.results = all_results
         return all_results
 
+
+    def run_all_1(self, num_epochs: int = 50, seed: int = 42) -> Dict[str, Any]:
+        """
+        运行所有模型的训练和评估
+
+        Returns:
+            包含所有模型结果的字典
+        """
+        print("\n" + "=" * 70)
+        print("开始模型对比实验")
+        print("=" * 70)
+        all_results = {}
+
+        for model_name, item in self.models.items():
+            print(f"\n{'─' * 50}")
+            print(f"训练模型: {model_name}----lr={item.get("lr", 1e-3)},weight_decay={item.get("weight_decay",1e-4)}, dropout={item.get("dropout",1e-4)}")
+            print(f"{'─' * 50}")
+            set_seed(seed)
+
+            start_time = time.time()
+
+            model = item.get("model")
+            # 深度学习模型
+            history = self.train_deep_model(
+                model, model_name,
+                num_epochs=num_epochs,
+                lr=item.get("lr", 1e-3),
+                weight_decay=item.get("weight_decay",1e-4),
+                patience=10
+            )
+            training_time = time.time() - start_time
+            # 评估
+            val_metrics = self.evaluate_model(model, self.val_loader)
+            test_metrics = self.evaluate_model(model, self.test_loader, threshold=val_metrics['threshold'])
+
+            # 保存训练历史
+            val_metrics['training_history'] = history
+
+            # training_time = time.time() - start_time
+
+            # 计算模型参数数量
+            if hasattr(model, 'parameters'):
+                # PyTorch模型
+                num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            elif isinstance(model, (xgb.XGBClassifier, lgb.LGBMClassifier, RandomForestClassifier)):
+                # sklearn模型：估计树的数量
+                num_params = model.n_estimators
+            else:
+                num_params = 0
+
+            # 汇总结果
+            result = {
+                'model_name': model_name,
+                'num_params': num_params,
+                'training_time_seconds': training_time,
+                'val_metrics': val_metrics,
+                'test_metrics': test_metrics,
+            }
+            all_results[model_name] = result
+
+            # 实时输出核心指标
+            print(f"\n[{model_name}] 验证集:")
+            print(f"  F1 (macro): {val_metrics['f1_macro']:.4f}")
+            print(f"  F1 (class1): {val_metrics['f1_class1']:.4f}")
+            print(f"  ROC-AUC: {val_metrics['roc_auc']:.4f}")
+            print(f"  PR-AUC: {val_metrics['pr_auc']:.4f}")
+            print(f"[{model_name}] 测试集:")
+            print(f"  F1 (macro): {test_metrics['f1_macro']:.4f}")
+            print(f"  F1 (class1): {test_metrics['f1_class1']:.4f}")
+            print(f"  ROC-AUC: {test_metrics['roc_auc']:.4f}")
+            print(f"  PR-AUC: {test_metrics['pr_auc']:.4f}")
+            print(f"  训练时间: {training_time:.1f}s")
+
+        self.results = all_results
+        return all_results
+
     def generate_report(
             self,
             results: Dict[str, Any],
