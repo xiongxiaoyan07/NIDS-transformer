@@ -1,0 +1,486 @@
+我先把“下一步”分成两类：一类是必须先做的稳定性/公平性检查，另一类才是调参。因为你现在的代码里已经有 weighted sampler、threshold search、focal loss，直接乱调很容易把验证集调好、测试集变差。
+
+我看完当前配置后，最重要的一点是：你虽然在 YAML 里列了大量 flow-level 特征，但当前 flow_fusion.enabled: false，所以这批 flow 特征实际上没有进入模型主干。下一步最优路线不是先加深 Transformer，而是先做“阈值选择逻辑修正 + flow 特征开启 + 小范围参数网格”。
+
+已思考 1m 43s
+
+你下一步不要再“凭感觉调参”。现在应该按诊断 → 小范围消融 → 参数精调 → 多 seed 确认来做。
+
+我给你一个最优路线。
+
+先说结论：下一步优先做 4 件事
+优先级 1：先修正 threshold search 逻辑
+
+你现在的 find_optimal_threshold() 有一个逻辑问题：它虽然会检查是否存在 precision_label1 >= 0.85 且 recall_label1 >= 0.85 的阈值，但最后实际返回的仍然是 F1 最高的阈值，而不是满足约束的那个阈值。你的 trainer.py 里确实先计算了 feasible，但后面又重新用 best_result = max(results, key=lambda x: x['f1']) 覆盖选择逻辑。
+
+trainer
+
+把最后这段：
+
+best_result = max(results, key=lambda x: x['f1'])
+
+print(f"\n[THRESHOLD] 最优阈值: {best_result['threshold']:.2f}")
+...
+return best_result['threshold'], results
+
+改成：
+
+if feasible:
+    best_result = max(
+        feasible,
+        key=lambda row: row["f1"],
+    )
+    print("\n[THRESHOLD] 使用满足 P>=0.85 且 R>=0.85 的最优阈值")
+else:
+    best_result = max(
+        results,
+        key=lambda row: row["f1"],
+    )
+    print("\n[THRESHOLD] 验证集无 P>=0.85 且 R>=0.85 的阈值，退回 F1_class1 最优阈值")
+
+print(f"\n[THRESHOLD] 最优阈值: {best_result['threshold']:.3f}")
+print(f"  F1_class1: {best_result['f1']:.4f}")
+print(f"  Precision_label1: {best_result['precision_label1']:.4f}")
+print(f"  Recall_label1: {best_result['recall_label1']:.4f}")
+print(f"  F1_macro: {best_result['f1_macro']:.4f}")
+
+return best_result["threshold"], results
+
+否则你后面再怎么调参，都可能出现：验证集明明存在更平衡的阈值，但程序最后用了另一个 F1 最高阈值。
+
+优先级 2：先开启 flow 特征，不要先加深 Transformer
+
+你当前配置里有大量 flow-level 特征，但：
+
+flow_fusion:
+  enabled: false
+  inject_to_packets: false
+  method: none
+
+也就是说，这些 flow 特征现在没有参与模型主干。配置文件里模型还是 d_model=128, num_layers=2, dropout=0.2, cls_head=1，训练参数是 lr=1e-4, weight_decay=5e-4, focal_gamma=1.5, label_smoothing=0.02, alpha_mode=none。
+
+stage1_config_0626_B_Both
+
+而你的 model.py 已经支持方案 C：flow_feats 可以经过 FlowFeatureEncoder 后与 packet pooling 表示做 gated/concat/add 融合。
+
+model
+
+所以下一步最该试的是：
+
+features:
+  flow_fusion:
+    enabled: true
+    inject_to_packets: false
+    method: gated
+
+不要先试：
+
+inject_to_packets: true
+
+因为把 flow 特征拼到每个 packet 上会重复注入大量 flow 统计特征，容易过拟合。先用方案 C 更稳。
+
+优先级 3：分类头先从 cls_head=1 改成 cls_head=2
+
+你现在配置是：
+
+cls_head: 1
+
+这会走默认浅分类头：
+
+LayerNorm
+Dropout
+Linear(d_model, num_classes)
+
+而 cls_head=2 会变成：
+
+LayerNorm
+Dropout
+Linear(d_model, d_model)
+GELU
+Dropout
+Linear(d_model, num_classes)
+
+你的 model.py 已经写好了这个分支。
+
+model
+
+当前 AUC 高、F1 不够，说明表示空间有一定排序能力，但边界不够强。cls_head=2 是很低风险的提升点。
+
+优先级 4：暂时不要动 d_model=256 或 num_layers=4
+
+你当前模型已经是：
+
+d_model: 128
+num_layers: 2
+dim_feedforward: 256
+dropout: 0.2
+
+这组是合理的。你的问题不是模型完全欠拟合，因为之前 AUC 已经到 0.985 左右。现在更像是：
+
+排序能力可以，但边界样本没拉开
+
+所以优先级应该是：
+
+threshold 逻辑修正
+>
+flow fusion
+>
+cls_head
+>
+loss/alpha 微调
+>
+再考虑加深模型
+我建议你按这个顺序跑
+
+我已经给你生成了 4 个下一步配置文件，可以直接参考或复制到你的 Colab/Drive 里使用：
+
+stage1_next_A_clshead2.yaml
+
+stage1_next_B_flowC_gated.yaml
+
+stage1_next_C_flowC_headtail.yaml
+
+stage1_next_D_flowC_recall_mildalpha.yaml
+
+实验 A：最小改动，只改分类头
+
+先跑这个：
+
+model:
+  cls_head: 2
+
+training:
+  alpha_mode: none
+  focal_gamma: 1.5
+  label_smoothing: 0.02
+  lr: 0.0001
+  weight_decay: 0.0005
+  use_weighted_sampler: false
+
+目标：判断是不是最终分类边界太弱。
+
+如果 A 比当前提升：
+
+f1_label1 +0.01 ~ +0.02
+
+说明分类头确实有帮助。
+
+如果基本不变，说明主要瓶颈不在 classifier。
+
+实验 B：开启 flow 特征，方案 C gated
+
+然后跑：
+
+features:
+  flow_fusion:
+    enabled: true
+    inject_to_packets: false
+    method: gated
+
+model:
+  cls_head: 2
+
+这是我最推荐的主实验。
+
+原因：你的 pipeline 会在方案 C 下记录 flow 特征维度并传给模型，模型中也已经有 FlowFeatureEncoder 和 FlowFusion 逻辑。
+
+pipeline
+
+这个实验重点看：
+
+PR-AUC 是否上升
+precision_label1 是否上升
+FP 是否下降
+
+如果开启 flow 后：
+
+precision_label1 上升
+recall_label1 不明显下降
+
+说明 flow 统计特征正在帮助模型排除正常流。
+
+实验 C：开启 flow + 改序列截断为 head_tail
+
+你现在是：
+
+sequence:
+  max_seq_len: 64
+  strategy: head
+
+这表示只取前 64 个 packet。若攻击证据不一定出现在 flow 开头，head 可能漏掉后半段异常。
+
+试：
+
+sequence:
+  max_seq_len: 64
+  strategy: head_tail
+
+注意：这个实验一定要换新的 out_dir，不要复用旧目录。因为你的 pipeline 会在 out_dir/precomputed 下缓存张量，换 sequence strategy 后最好用新目录，避免读到旧缓存。pipeline 里确实会把 train/val/test tensor 预计算到 precomputed 目录。
+
+pipeline
+
+重点看：
+
+recall_label1 是否上升
+FN 是否下降
+
+如果 recall 上升明显，说明攻击证据不完全在前 64 个包。
+
+实验 D：只在 recall 仍低时用 mild alpha
+
+如果实验 B/C 后 recall 仍然低，比如：
+
+precision_label1 >= 0.80
+recall_label1 < 0.80
+
+再试：
+
+training:
+  alpha_mode: mild
+  focal_gamma: 1.2
+  label_smoothing: 0.01
+
+不要一开始就上 balanced 或 WeightedRandomSampler。
+
+你当前 trainer.py 里：
+
+alpha_mode == mild -> alpha = [0.45, 0.55]
+alpha_mode == balanced -> compute_class_alpha(...)
+
+同时 pipeline 里也构造了 WeightedRandomSampler，但是否使用取决于 use_weighted_sampler。
+
+trainer
+
+ 
+
+pipeline
+
+我的建议是：
+
+alpha_mode: mild
+use_weighted_sampler: false
+
+不要同时开：
+
+alpha_mode: balanced
+use_weighted_sampler: true
+
+否则会过度偏向 label1，recall 可能上去，但 precision 会明显掉。
+
+你现在最优参数搜索范围
+
+不要大网格，先小范围。
+
+模型参数
+model:
+  d_model: [128]
+  nhead: [4]
+  num_layers: [2, 3]
+  dim_feedforward: [256, 512]
+  dropout: [0.15, 0.2, 0.25]
+  cls_head: [1, 2]
+
+建议优先：
+
+d_model: 128
+num_layers: 2
+dim_feedforward: 256
+dropout: 0.2
+cls_head: 2
+
+如果 flow fusion 后仍然欠拟合，再试：
+
+num_layers: 3
+dim_feedforward: 512
+dropout: 0.2
+
+不要马上上 d_model=256。
+
+训练参数
+training:
+  lr: [0.00005, 0.0001, 0.0002]
+  weight_decay: [0.0001, 0.0005, 0.001]
+  focal_gamma: [1.0, 1.2, 1.5]
+  label_smoothing: [0.0, 0.01, 0.02]
+  alpha_mode: [none, mild]
+  use_weighted_sampler: false
+
+推荐起点：
+
+training:
+  lr: 0.0001
+  weight_decay: 0.0005
+  focal_gamma: 1.5
+  label_smoothing: 0.02
+  alpha_mode: none
+  use_weighted_sampler: false
+
+如果 recall 低：
+
+focal_gamma: 1.2
+label_smoothing: 0.01
+alpha_mode: mild
+
+如果 precision 低：
+
+alpha_mode: none
+focal_gamma: 1.5
+label_smoothing: 0.02
+weight_decay: 0.001
+你接下来具体怎么跑
+第一步：修 trainer.py 的 threshold 返回逻辑
+
+这个必须先做。
+
+否则后续结果可能被错误阈值干扰。
+
+第二步：跑 A
+python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0626_B/next/stage1_next_A_clshead2.yaml \
+  --out_dir /content/drive/MyDrive/s1/0626_B/next/A_clshead2/
+第三步：跑 B
+python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0626_B/next/stage1_next_B_flowC_gated.yaml \
+  --out_dir /content/drive/MyDrive/s1/0626_B/next/B_flowC_gated/
+第四步：跑 C
+python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0626_B/next/stage1_next_C_flowC_headtail.yaml \
+  --out_dir /content/drive/MyDrive/s1/0626_B/next/C_flowC_headtail/
+第五步：只有 recall 仍低时跑 D
+python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0626_B/next/stage1_next_D_flowC_recall_mildalpha.yaml \
+  --out_dir /content/drive/MyDrive/s1/0626_B/next/D_flowC_recall_mildalpha/
+每次跑完只看这 6 个指标
+
+不要只看 accuracy。
+
+你要记录：
+
+precision_label1
+recall_label1
+f1_label1
+pr_auc
+auc
+confusion_matrix
+
+尤其是 confusion matrix：
+
+FP 是否下降？
+FN 是否下降？
+
+你的目标不是单纯提高 F1，而是同时降低：
+
+FP: 329
+FN: 298
+
+如果某个实验：
+
+FP 大幅下降，但 FN 上升
+
+说明 precision 变好、recall 变差。
+
+如果：
+
+FN 大幅下降，但 FP 上升
+
+说明 recall 变好、precision 变差。
+
+最理想的是 flow fusion 后：
+
+FP 下降
+FN 不明显上升
+
+然后再通过 threshold 或 mild alpha 去追回 recall。
+
+不建议你现在做的事情
+1. 不要马上开 weighted sampler
+
+你的 pipeline 已经构造了 WeightedRandomSampler，但 trainer 会根据 use_weighted_sampler 决定用 loaders["train"] 还是 loaders["trainNoSampler"]。当前配置是 false，所以训练实际用的是非采样 loader。
+
+pipeline
+
+先不要打开它。因为你现在 precision 和 recall 都不够，weighted sampler 很可能让 recall 上升、precision 下降。
+
+2. 不要马上用 balanced alpha
+
+balanced 会比 mild 激进很多。当前误报已经有 329 个，如果过度偏向 label1，FP 可能继续升高。
+
+3. 不要先加深到 4 层 Transformer
+
+你现在不是明显欠拟合。AUC 已经很高，说明排序能力不错。加深模型可能只会让验证集变好、测试集不稳。
+
+最推荐的最终组合
+
+如果只能选一个方向，我建议你下一版主力配置是：
+
+sequence:
+  max_seq_len: 64
+  strategy: head
+
+features:
+  flow_fusion:
+    enabled: true
+    inject_to_packets: false
+    method: gated
+
+model:
+  d_model: 128
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 256
+  dropout: 0.2
+  cls_head: 2
+  use_positional_encoding: true
+  use_time_encoding: true
+
+training:
+  epochs: 500
+  batch_size: 128
+  lr: 0.0001
+  weight_decay: 0.0005
+  early_stop_patience: 15
+  monitor_metric: pr_auc
+  alpha_mode: none
+  focal_gamma: 1.5
+  label_smoothing: 0.02
+  use_weighted_sampler: false
+  loss: focal
+
+如果这个版本 precision 上升但 recall 不够，再切到：
+
+training:
+  alpha_mode: mild
+  focal_gamma: 1.2
+  label_smoothing: 0.01
+
+如果这个版本 recall 上升但 precision 掉了，就回到：
+
+alpha_mode: none
+focal_gamma: 1.5
+label_smoothing: 0.02
+weight_decay: 0.001
+最终路线图
+
+你现在按这个顺序做：
+
+1. 修 threshold search 返回逻辑
+2. 跑 cls_head=2
+3. 跑 flow_fusion 方案 C gated
+4. 跑 flow_fusion + head_tail
+5. 只有 recall 不够时，再跑 mild alpha
+6. 选最优版本后，用 3 个 seed 重复验证
+
+不要同时改太多。
+你现在最该验证的核心假设是：
+
+flow-level 统计特征能不能帮助模型减少 FP，同时保持 recall。
+
+如果能，下一步才值得继续做 TimeAwareEncoding 的结构升级。
