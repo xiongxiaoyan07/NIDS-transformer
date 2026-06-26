@@ -156,7 +156,36 @@ def main():
         out_dir=args.out_dir,
         external_packet_csv=args.external_packet_csv,
         external_flow_csv=args.external_flow_csv,
+        seed=seed
     )
+
+    # ================================
+    # DEBUG：检查 DataLoader 是否确定性
+    # ================================
+    print("\n[DEBUG] --TRAIN--- Checking train_loader consistency...")
+    for i, batch in enumerate(loaders["train"]):
+        print("[DEBUG --TRAIN--- batch 0 flow_ids]:", batch["flow_id"][:5])
+        if i == 2:
+            break
+
+    print("\n[DEBUG] --TRAIN-trainNoSampler-- Checking train_loader  consistency...")
+    for i, batch in enumerate(loaders["trainNoSampler"]):
+        print("[DEBUG --TRAIN-trainNoSampler-- batch 0 flow_ids]:", batch["flow_id"][:5])
+        if i == 2:
+            break
+
+    print("\n[DEBUG] --VAL--- Checking VAL_loader consistency...")
+    for i, batch in enumerate(loaders["val"]):
+        print("[DEBUG --VAL--- batch 0 flow_ids]:", batch["flow_id"][:5])
+        if i == 2:
+            break
+
+    print("\n[DEBUG] --TEST--- Checking TEST_loader consistency...")
+    for i, batch in enumerate(loaders["test"]):
+        print("[DEBUG --TEST--- batch 0 flow_ids]:", batch["flow_id"][:5])
+        if i == 2:
+            break
+
     # Print summary
     print("\n[INFO] Preprocessor Summary:")
     print("external_test", metadata["external_test"])

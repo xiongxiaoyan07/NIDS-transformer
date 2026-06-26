@@ -199,12 +199,22 @@ def make_loss_fn(
         )
 
     if loss_type == "focal":
-        alpha = compute_class_alpha(train_labels, num_classes=2).to(device) if weighted else None
-        return FocalLossWithLabelSmoothing(
-            alpha=alpha,
-            gamma=float(train_cfg.get("focal_gamma", 2.0)),
-            label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
-        )
+        use_sampler = bool(train_cfg.get("use_weighted_sampler", False))
+
+        if use_sampler:
+            print("[INFO] use_weighted_sampler is true.")
+            alpha = compute_class_alpha(train_labels, num_classes=2).to(device) if weighted else None
+            return FocalLossWithLabelSmoothing(
+                alpha=alpha,
+                gamma=float(train_cfg.get("focal_gamma", 2.0)),
+                label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+            )
+        else:
+            return FocalLossWithLabelSmoothing(
+                alpha=None,
+                gamma=float(train_cfg.get("focal_gamma", 2.0)),
+                label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+            )
 
     raise ValueError(f"Unknown training.loss_type: {loss_type}")
 
@@ -393,7 +403,7 @@ def parse_int_list(text: str) -> List[int]:
 
 def d_model_choices(input_dim: int, profile: str) -> List[str]:
     if profile == "fast":
-        raw = [64, 128, 256, input_dim]
+        raw = [64, 128, 256, 384, 512, input_dim]
     else:
         raw = [64, 96, 128, 192, 256, 384, 512, input_dim]
 
@@ -728,7 +738,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window_sizes",
         type=str,
-        default="",
+        default="32,64,128,256,512,1024",
         help=(
             "Optional comma-separated context windows. Empty keeps the YAML value fixed, "
             "which is recommended for the first Colab search."
@@ -842,15 +852,21 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
+
+# from google.colab import drive
+# drive.mount('/content/drive')
+
+
 # !pip -q install optuna
 
 
 # !python /content/drive/MyDrive/s2/tune_stage2_optuna.py \
 #   --stage1_dir /content/drive/MyDrive/s1/tensors_ar_002 \
-#   --config /content/drive/MyDrive/s2/stage2_config_0619.yaml \
-#   --out_dir /content/drive/MyDrive/s2/stage2_optuna_0619 \
-#   --study_name stage2_transformer_v1 \
-#   --n_trials 30 \
+#   --config /content/drive/MyDrive/s2/stage2_config_0622_timeonly.yaml \
+#   --out_dir /content/drive/MyDrive/s2/stage2_optuna_0622_timeonly \
+#   --study_name stage2_transformer_timeonly \
+# 忘记了，没有加window_size
+#   --n_trials 50 \
 #   --max_epochs 35 \
 #   --patience 6 \
 #   --final_epochs 150 \

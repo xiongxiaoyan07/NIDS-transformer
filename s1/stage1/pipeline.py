@@ -87,7 +87,6 @@ def build_dataloaders(
 
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
-    seed = int(cfg.get("seed", 42))
 
     split_method = split_cfg.get("method", "stratified")
     time_col = data_cfg.get("flow_time_col", "flow_start_timestamp_us")
@@ -113,6 +112,9 @@ def build_dataloaders(
             flow_id_col=flow_id_col,
             label_col=label_col,
             packet_time_col=packet_time_col,
+            max_seq_len = max_seq_len,
+            strategy = strategy,
+            seed = seed
         )
 
         if split_method == "chronological":

@@ -1381,7 +1381,19 @@ static bool CustomPacketLoggerCondition(ThreadVars *tv, void *thread_data, const
 {
     (void)tv;
     (void)thread_data;
-    (void)p;
+
+    if (p == NULL || p->flow == NULL)
+        return false;
+
+    if (!PacketIsIPv4(p) && !PacketIsIPv6(p))
+        return false;
+
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return false;
+
+    /* 是否排除 tunnel child 取决于你的建模定义。 */
+    if (PacketIsTunnelChild(p))
+        return false;
 
     return true;
 }

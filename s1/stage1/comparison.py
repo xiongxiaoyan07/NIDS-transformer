@@ -21,13 +21,13 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     roc_auc_score, average_precision_score, confusion_matrix,
-    classification_report
+    classification_report, precision_recall_curve
 )
 import xgboost as xgb
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestClassifier
 
-from stage1.utils import set_seed
+from .utils import set_seed
 from .baselines import (
     FlowLevelMLP, LSTMClassifier, BiLSTMClassifier,
     GRUClassifier, CNN1DClassifier, StandardTransformer
@@ -256,13 +256,15 @@ class ModelBenchmark:
         )
         print("[✓] Ours - No Encoding")
 
-        # # 4. 既有时间、又有位置
-        # config_both = copy.deepcopy(base_config)
-        # self.models['Ours_BothEncoding'] = Stage1TimeAwareTransformer(
-        #     input_dim=self.input_dim,
-        #     cfg=config_both
-        # )
-        # print("[✓] Ours - Both Time and Position Encoding")
+        # 4. 既有时间、又有位置
+        config_both = copy.deepcopy(base_config)
+        config_both['model']['use_time_encoding'] = True
+        config_both['model']['use_positional_encoding'] = True
+        self.models['Ours_BothEncoding'] = Stage1TimeAwareTransformer(
+            input_dim=self.input_dim,
+            cfg=config_both
+        )
+        print("[✓] Ours - Both Time and Position Encoding")
         #
         # # 5. 无流特征（如果使用了方案C）
         # if self.has_flow_feats:
@@ -300,12 +302,35 @@ class ModelBenchmark:
             except Exception as e:
                 print(f"[{model_name}] torch.compile 失败: {e}，使用普通模式")
 
-        # 计算类别权重（处理不平衡）
-        alpha = self._compute_class_weights()
+        train_cfg = self.config.get("training", {})
 
-        criterion = FocalLossWithLabelSmoothing(
-            alpha=alpha, gamma=2.0, label_smoothing=0.1
-        )
+        gamma = float(train_cfg.get("focal_gamma", 1.5))
+        label_smoothing = float(train_cfg.get("label_smoothing", 0.02))
+        alpha_mode = str(train_cfg.get("alpha_mode", "none")).lower()
+        loss_name = train_cfg.get("loss", "focal")
+
+        if alpha_mode == "none":
+            alpha = None
+
+        elif alpha_mode == "mild":
+            # 温和 class1 加权，不像原始 balanced alpha 那么激进
+            alpha = torch.tensor([0.45, 0.55], dtype=torch.float32, device=self.device)
+
+        elif alpha_mode == "balanced":
+            alpha = self._compute_class_weights().to(self.device)
+
+        else:
+            raise ValueError(f"Unknown alpha_mode: {alpha_mode}")
+
+        if loss_name == "ce":
+            criterion = nn.CrossEntropyLoss(weight=alpha)
+        else:
+            criterion = FocalLossWithLabelSmoothing(
+                alpha=alpha,
+                gamma=gamma,
+                label_smoothing=label_smoothing,
+            )
+
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=lr, weight_decay=weight_decay
         )
@@ -520,6 +545,11 @@ class ModelBenchmark:
 
         predictions = (scores >= threshold).astype(int)
 
+        if loader is self.test_loader:
+            sweep_df = self._threshold_sweep_table(scores, all_labels)
+            print("\n[TEST Threshold Sweep]")
+            print(sweep_df.to_string(index=False))
+
         # 计算指标
         metrics = {
             'threshold': threshold,
@@ -607,6 +637,7 @@ class ModelBenchmark:
         x_val, y_val = self._prepare_flow_level_data(self.val_loader)
         x_test, y_test = self._prepare_flow_level_data(self.test_loader)
         print("[INFO] 流级数据缓存完成。")
+        train_cfg = self.config.get("training", {})
 
         for model_name, model in self.models.items():
             print(f"\n{'─' * 50}")
@@ -629,9 +660,9 @@ class ModelBenchmark:
                 history = self.train_deep_model(
                     model, model_name,
                     num_epochs=num_epochs,
-                    lr=1e-3,
-                    weight_decay=1e-4,
-                    patience=10
+                    lr=float(train_cfg.get("lr", 1e-4)),
+                    weight_decay=float(train_cfg.get("weight_decay", 5e-4)),
+                    patience=int(train_cfg.get("early_stop_patience", 10)),
                 )
                 training_time = time.time() - start_time
                 # 评估
@@ -851,6 +882,8 @@ class ModelBenchmark:
             alpha[i] = n / (k * c)
 
         self._cached_alpha = alpha
+
+        print(f"[INFO] _compute_class_weights----counts = {counts}, alpha = {alpha}")
         return alpha
 
     def _find_optimal_threshold(
@@ -858,18 +891,113 @@ class ModelBenchmark:
             scores: np.ndarray,
             labels: np.ndarray
     ) -> float:
-        """在验证集上搜索最优决策阈值（最大化 F1）"""
-        best_threshold = 0.5
-        best_f1 = 0.0
+        """
+        在验证集上搜索 class1 的最优阈值。
 
-        for threshold in np.arange(0.1, 0.95, 0.02):
-            predictions = (scores >= threshold).astype(int)
-            f1 = f1_score(labels, predictions, average='macro', zero_division=0)
-            if f1 > best_f1:
-                best_f1 = f1
-                best_threshold = threshold
+        支持：
+        1. 最大化 F-beta
+        2. precision 下限约束
+        3. recall 下限约束
+        """
+        train_cfg = self.config.get("training", {})
+
+        beta = float(train_cfg.get("threshold_beta", 1.0))
+        min_precision = train_cfg.get("min_precision_class1", None)
+        min_recall = train_cfg.get("min_recall_class1", None)
+
+        if min_precision is not None:
+            min_precision = float(min_precision)
+        if min_recall is not None:
+            min_recall = float(min_recall)
+
+        scores = np.asarray(scores, dtype=float)
+        labels = np.asarray(labels, dtype=int)
+
+        precision, recall, thresholds = precision_recall_curve(labels, scores)
+
+        # precision/recall 比 thresholds 多一个点，最后一个点没有对应 threshold
+        precision = precision[:-1]
+        recall = recall[:-1]
+
+        beta2 = beta ** 2
+        fbeta = (1.0 + beta2) * precision * recall / (
+                beta2 * precision + recall + 1e-12
+        )
+
+        valid = np.ones_like(fbeta, dtype=bool)
+
+        if min_precision is not None:
+            valid &= precision >= min_precision
+
+        if min_recall is not None:
+            valid &= recall >= min_recall
+
+        if valid.any():
+            idx = int(np.argmax(np.where(valid, fbeta, -1.0)))
+        else:
+            # 如果约束太严格，就退回最大 F-beta
+            idx = int(np.argmax(fbeta))
+
+        best_threshold = float(thresholds[idx])
+
+        print(
+            f"[THRESHOLD] threshold={best_threshold:.4f}, "
+            f"P1={precision[idx]:.4f}, "
+            f"R1={recall[idx]:.4f}, "
+            f"F{beta:.1f}={fbeta[idx]:.4f}, "
+            f"minP={min_precision}, minR={min_recall}"
+        )
 
         return best_threshold
+
+    def _threshold_sweep_table(
+            self,
+            scores: np.ndarray,
+            labels: np.ndarray,
+            thresholds=None
+    ) -> pd.DataFrame:
+        """
+        输出不同 threshold 下的 class1 precision / recall / F1。
+        用来分析 precision-recall trade-off。
+        """
+        if thresholds is None:
+            thresholds = np.arange(0.50, 0.91, 0.02)
+
+        rows = []
+
+        for threshold in thresholds:
+            pred = (scores >= threshold).astype(int)
+
+            rows.append({
+                "threshold": float(threshold),
+                "precision_class1": precision_score(labels, pred, pos_label=1, zero_division=0),
+                "recall_class1": recall_score(labels, pred, pos_label=1, zero_division=0),
+                "f1_class1": f1_score(labels, pred, pos_label=1, zero_division=0),
+                "fp": int(((labels == 0) & (pred == 1)).sum()),
+                "fn": int(((labels == 1) & (pred == 0)).sum()),
+                "tp": int(((labels == 1) & (pred == 1)).sum()),
+                "tn": int(((labels == 0) & (pred == 0)).sum()),
+            })
+
+        return pd.DataFrame(rows)
+    # def _find_optimal_threshold(
+    #         self,
+    #         scores: np.ndarray,
+    #         labels: np.ndarray
+    # ) -> float:
+    #     """在验证集上搜索最优决策阈值（最大化 F1）"""
+    #     best_threshold = 0.5
+    #     best_f1 = 0.0
+    #
+    #     for threshold in np.arange(0.1, 0.95, 0.02):
+    #         predictions = (scores >= threshold).astype(int)
+    #         # f1 = f1_score(labels, predictions, average='macro', zero_division=0)
+    #         f1 = f1_score(labels, predictions, pos_label=1)
+    #         if f1 > best_f1:
+    #             best_f1 = f1
+    #             best_threshold = threshold
+    #
+    #     return best_threshold
 
     def _generate_comparison_tables(
             self,

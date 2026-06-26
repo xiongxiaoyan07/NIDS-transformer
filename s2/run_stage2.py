@@ -207,6 +207,7 @@ def main() -> None:
     print("[INFO] Stage2 --------- ContextIndexBuilder")
     context_builder = ContextIndexBuilder(meta_df, cfg)
     context_indices = context_builder.build()
+    print("[INFO] Stage2 --------- context_indices = ", context_indices[:3])
 
     print_data_summary(meta_df, z_sorted, context_indices)
 

@@ -116,6 +116,7 @@ def read_stage1_csvs(
             continue
 
         # random
+        print("[data_io.py] --- read_stage1_csvs--- seed = ", seed)
         rng = np.random.default_rng(seed + int(fid) % 1000003)
         chosen = rng.choice(n, size=max_seq_len, replace=False)
         chosen = np.sort(chosen)
@@ -172,26 +173,6 @@ def generate_and_save_stage1_tensors(
     inject_to_packets = flow_fusion_cfg.get("inject_to_packets", True)
     use_flow_features = flow_fusion_cfg.get("enabled", False)
 
-    # print("[INFO] data_ip.py ------ generate_and_save_stage1_tensors  00000 ---", save_name_prefix)
-    # print("[INFO] data_io.py ------ generate_and_save_stage1_tensors --- 11111 flows shape = ", flows.shape)
-    # # 这里也是没有重复的
-    # if flows["flow_id"].duplicated().any():
-    #     dup_mask = flows["flow_id"].duplicated()
-    #     examples = flows.loc[dup_mask, "flow_id"].head(10).tolist()
-    #     total = int(dup_mask.sum())
-    #     print(f"data_io.py------Duplicated flow_id in Stage1 flows. Total duplicated: {total} Examples: {examples}")
-    #     # 检查重复
-    #
-    # unique_ids, counts = np.unique(np.array(flow_ids, dtype=np.int64), return_counts=True)
-    # dup_ids = unique_ids[counts > 1]
-    # print("[INFO] data_io.py----2222222----flow_ids len: ", len(flow_ids))
-    # # 这里也没有重复的
-    # if len(dup_ids) > 0:
-    #     total = (counts[counts > 1] - 1).sum()  # 重复的总条目数（排除第一次出现）
-    #     examples = dup_ids[:10].tolist()
-    #     print(
-    #         f"[INFO]  data_io.py----2222222---------------Total duplicated: {total} Examples: {examples}")
-
     # 1. 固定 flow_ids 顺序
     flow_ids = [int(x) for x in flow_ids]
     num_flows = len(flow_ids)
@@ -214,8 +195,8 @@ def generate_and_save_stage1_tensors(
     # 4. 一次性转换所有 packet features
     # 注意：这里先只做 packet features，不拼 flow features
     packet_x_all = preprocessor.transform_packets_only(packets_sub).astype(np.float32)
-    print("[DEBUG] packet_x_all shape:", packet_x_all.shape)
-    print("[DEBUG] packet_x_all sample:\n", packet_x_all[:1, :])  # 打印前5个packet的前10个特征
+    print("[data_io.py] packet_x_all shape:", packet_x_all.shape)
+    print("[data_io.py] packet_x_all sample:\n", packet_x_all[:1, :])  # 打印前5个packet的前10个特征
 
     # 5. 一次性构造 time
     if packet_iat_col in packets_sub.columns:
@@ -235,8 +216,8 @@ def generate_and_save_stage1_tensors(
     # 6. 一次性转换所有 flow features
     if use_flow_features and preprocessor.has_flow_features():
         flow_x_all = preprocessor.transform_flows(flows_sub).astype(np.float32)
-        print("[DEBUG] flow_x_all shape:", flow_x_all.shape)
-        print("[DEBUG] flow_x_all sample:\n", flow_x_all[:1, :])
+        print("[data_io.py] flow_x_all shape:", flow_x_all.shape)
+        print("[data_io.py] flow_x_all sample:\n", flow_x_all[:1, :])
     else:
         flow_x_all = None
 
@@ -246,16 +227,19 @@ def generate_and_save_stage1_tensors(
         flow_feature_dim = preprocessor.flow_feature_dim()
         feature_dim = packet_feature_dim + flow_feature_dim
         flow_feats_tensor = None
-        print("[INFO] 模式: 方案A - Flow特征拼接到Packets")
+        fusion_method = "A"
+        print("[data_io.py] 模式: 方案A - Flow特征拼接到Packets")
     elif not inject_to_packets and use_flow_features and flow_x_all is not None:
         flow_feature_dim = preprocessor.flow_feature_dim()
         feature_dim = packet_feature_dim
         flow_feats_tensor = flow_x_all
-        print("[INFO] 模式: 方案C - 分层特征注入")
+        fusion_method = "C"
+        print("[data_io.py] 模式: 方案C - 分层特征注入")
     else:
         feature_dim = packet_feature_dim
         flow_feats_tensor = None
-        print("[INFO] 模式: 方案B - 仅Packet特征")
+        fusion_method = "B"
+        print("[data_io.py] 模式: 方案B - 仅Packet特征")
 
     x_tensor = np.zeros((num_flows, max_seq_len, feature_dim), dtype=np.float32)
     time_tensor = np.zeros((num_flows, max_seq_len), dtype=np.float32)
@@ -270,7 +254,7 @@ def generate_and_save_stage1_tensors(
         indices = group_indices.get(fid)
 
         if indices is None:
-            print("indices is none")
+            print("[data_io.py] indices is none")
             continue
 
         real_len = min(len(indices), max_seq_len)
@@ -317,7 +301,7 @@ def generate_and_save_stage1_tensors(
 
     save_path = os.path.join(
         out_dir,
-        f"seqLen{max_seq_len}{strategy}{save_name_prefix}.npz"
+        f"seqLen{max_seq_len}{strategy}{save_name_prefix}{fusion_method}.npz"
     )
 
     save_dict = {
@@ -363,7 +347,20 @@ def get_or_generate_stage1_tensors(
     seq_cfg = cfg.get("sequence", {})
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
-    npz_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{prefix}.npz")
+
+    flow_fusion = cfg.get("features",{}).get("flow_fusion", {})
+    flow_fusion_enabled = bool(flow_fusion.get("enabled", False))
+    inject_to_packets = bool(flow_fusion.get("inject_to_packets", False))
+    method = ""
+    if flow_fusion_enabled and inject_to_packets:
+        method = "A"
+    if not flow_fusion_enabled and not inject_to_packets:
+        method = "B"
+    if flow_fusion_enabled and not inject_to_packets:
+        method = "C"
+
+    print("每个packet都包含flow信息的方案是 = ", method)
+    npz_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}{prefix}{method}.npz")
     if os.path.exists(npz_path):
         print(f"[INFO] found existing precomputed tensor: {npz_path}")
         return npz_path

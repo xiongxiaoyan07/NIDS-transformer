@@ -57,63 +57,67 @@ def train_model(
     patience = int(train_cfg.get("early_stop_patience", 5))
     monitor = str(train_cfg.get("monitor_metric", "f1_label1"))
     label_smoothing = cfg["training"].get("label_smoothing", 0.1)
+    use_weighted_sampler = train_cfg.get("use_weighted_sampler", False)
 
     seq_cfg = cfg.get("sequence", {})
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
 
+    alpha_mode = str(train_cfg.get("alpha_mode", "none")).lower()
+    loss_name = train_cfg.get("loss", "focal")
 
-    # 计算类别权重
-    # 验证标签分布
-    unique, counts = np.unique(train_labels, return_counts=True)
-    print(f"[INFO] train_model收到的标签分布: {dict(zip(unique, counts))}")
-    imbalance_ratio = counts[0] / counts[1] if counts[1] > 0 else 1.0
-    print(f"[INFO] 不平衡比率 (多数:少数): {imbalance_ratio:.1f}:1")
+    if alpha_mode == "none":
+        alpha = None
 
-    # 根据不平衡程度自动调整gamma
-    if imbalance_ratio > 10:
-        recommended_gamma = 2.0
-    elif imbalance_ratio > 5:
-        recommended_gamma = 1.5
+    elif alpha_mode == "mild":
+        # 温和 class1 加权，不像原始 balanced alpha 那么激进
+        alpha = torch.tensor([0.45, 0.55], dtype=torch.float32, device=device)
+
+    elif alpha_mode == "balanced":
+        alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+
     else:
-        recommended_gamma = 1.0
+        raise ValueError(f"Unknown alpha_mode: {alpha_mode}")
+    if loss_name == "ce":
+        criterion = nn.CrossEntropyLoss(weight=alpha)
+    else:
+        criterion = FocalLossWithLabelSmoothing(
+            alpha=alpha,
+            gamma=gamma,
+            label_smoothing=label_smoothing,
+        )
 
-    print(f"[INFO] 自动推荐focal_gamma: {recommended_gamma} (配置值为: {gamma})")
-    # 如果配置的gamma与推荐值差距太大，使用推荐值
-    if abs(gamma - recommended_gamma) > 0.5:
-        print(f"[WARNING] 配置的gamma({gamma})与推荐值({recommended_gamma})差距较大，使用推荐值")
-        gamma = recommended_gamma
-    # train_labels = collect_train_labels(loaders["train"]) train 在 pipeline中已经进行了WeightedRandomSampler，所以比例已经基本平均了
-    alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
-
-    print(f"[INFO] trainer.py ------ train_model-------alpha = {alpha} & gamma={gamma} & label_smoothing={label_smoothing}")
-    # criterion = FocalLoss(alpha=alpha, gamma=gamma)
-    # 使用FocalLossWithLabelSmoothing作为损失函数
-    criterion = FocalLossWithLabelSmoothing(
-        alpha=alpha,
-        gamma=gamma,
-        label_smoothing=label_smoothing
-    )
+    # 类别权重：沿用你原来的不平衡处理
+    # alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+    # criterion = FocalLossWithLabelSmoothing(
+    #     alpha=alpha,
+    #     gamma=gamma,
+    #     label_smoothing=label_smoothing,
+    # )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    # 添加学习率调度器
-    warmup_epochs = max(1, min(20, epochs // 10))
-    warmup_scheduler = LinearLR(
-        optimizer,
-        start_factor=0.1,
-        end_factor=1.0,
-        total_iters=warmup_epochs
-    )
-    cosine_scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=epochs - warmup_epochs,
-        eta_min=lr * 0.01
-    )
-    scheduler = SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[warmup_epochs]
+    # # 添加学习率调度器
+    # warmup_epochs = max(1, min(20, epochs // 10))
+    # warmup_scheduler = LinearLR(
+    #     optimizer,
+    #     start_factor=0.1,
+    #     end_factor=1.0,
+    #     total_iters=warmup_epochs
+    # )
+    # cosine_scheduler = CosineAnnealingLR(
+    #     optimizer,
+    #     T_max=epochs - warmup_epochs,
+    #     eta_min=lr * 0.01
+    # )
+    # scheduler = SequentialLR(
+    #     optimizer,
+    #     schedulers=[warmup_scheduler, cosine_scheduler],
+    #     milestones=[warmup_epochs]
+    # )
+    # 学习率调度
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=epochs
     )
 
     best_score = -1e18
@@ -123,8 +127,17 @@ def train_model(
     best_path = os.path.join(out_dir, f"seqLen{max_seq_len}{strategy}stage1_best_model.pt")
     history = []
 
+    # 在 train_deep_model 的最开始（optimizer 定义之后）初始化 GradScaler
+    use_amp = device.type == "cuda"
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+    if use_weighted_sampler:
+        train_loader = loaders["train"]
+    else:
+        train_loader = loaders["trainNoSampler"]
+
     for epoch in range(1, epochs + 1):
-        train_loss = _train_one_epoch(model, loaders["train"], optimizer, criterion, device)
+        train_loss = _train_one_epoch(model, train_loader, optimizer, criterion, device, scaler)
         scheduler.step()  # 添加这行
         val_metrics = evaluate_model(model, loaders["val"], criterion, device)
 
@@ -139,14 +152,14 @@ def train_model(
 
         if (epoch + 1) % 5 == 0:
             print(
-                f"[Epoch {epoch:03d}] "
+                f"[Epoch {epoch + 1}/{epochs}] "
                 f"train_loss={train_loss:.6f} "
                 f"val_loss={val_metrics['loss']:.6f} "
                 f"val_accuracy={val_metrics['accuracy']:.4f} "
+                f"val_f1_label1={val_metrics['f1_label1']:.4f} "
                 f"val_macro_f1={val_metrics['macro_f1']:.4f} "
                 f"val_weighted_f1={val_metrics['weighted_f1']:.4f}"
                 f"val_auc={val_metrics['auc']:.4f}"
-                f"{'*' if score > best_score else ''}"
             )
 
         if score > best_score:
@@ -248,38 +261,42 @@ def train_model(
         "test_metrics": test_metrics,
     }
 
-def _train_one_epoch(model, loader, optimizer, criterion, device) -> float:
+def _train_one_epoch(model, loader, optimizer, criterion, device, scaler) -> float:
     model.train()
 
     total_loss = 0.0
     total_count = 0
 
     for batch in loader:
-        x = batch["x"].to(device)
-        t = batch["time"].to(device)
-        mask = batch["mask"].to(device)
-        y = batch["label"].to(device)
+        x = batch["x"].to(device, non_blocking=True)
+        t = batch["time"].to(device, non_blocking=True)
+        mask = batch["mask"].to(device, non_blocking=True)
+        y = batch["label"].to(device, non_blocking=True)
 
         # 获取flow_feats（如果存在）
         flow_feats = batch.get("flow_feats")
         if flow_feats is not None:
-            flow_feats = flow_feats.to(device)
+            flow_feats = flow_feats.to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
 
         # 调用模型时传入flow_feats
-        logits = model(x, t, mask, flow_feats=flow_feats)
-        loss = criterion(logits, y)
+        # 🚀 使用混合精度向前传播
+        use_amp = device.type == "cuda"
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logits = model(x, t, mask, flow_feats=flow_feats)
+            loss = criterion(logits, y)
 
-        loss.backward()
+        # 🚀 混合精度反向传播
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
-        total_loss += float(loss.item()) * x.size(0)
-        total_count += x.size(0)
+        total_loss += float(loss.item())
 
-    return total_loss / max(total_count, 1)
-
+    return total_loss / len(loader)
 
 def train_model_for_optuna(
     model: torch.nn.Module,
@@ -319,14 +336,36 @@ def train_model_for_optuna(
     max_seq_len = int(seq_cfg.get("max_seq_len", 64))
     strategy = seq_cfg.get("strategy", "head")
 
-    # 类别权重：沿用你原来的不平衡处理
-    alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+    alpha_mode = str(train_cfg.get("alpha_mode", "none")).lower()
+    loss_name = train_cfg.get("loss", "focal")
 
-    criterion = FocalLossWithLabelSmoothing(
-        alpha=alpha,
-        gamma=gamma,
-        label_smoothing=label_smoothing,
-    )
+    if alpha_mode == "none":
+        alpha = None
+
+    elif alpha_mode == "mild":
+        # 温和 class1 加权，不像原始 balanced alpha 那么激进
+        alpha = torch.tensor([0.4, 0.6], dtype=torch.float32, device=device)
+
+    elif alpha_mode == "balanced":
+        alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+
+    else:
+        raise ValueError(f"Unknown alpha_mode: {alpha_mode}")
+    # 类别权重：沿用你原来的不平衡处理
+    # alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
+    if loss_name == "ce":
+        criterion = nn.CrossEntropyLoss(weight=alpha)
+    else:
+        criterion = FocalLossWithLabelSmoothing(
+            alpha=alpha,
+            gamma=gamma,
+            label_smoothing=label_smoothing,
+        )
+    # criterion = FocalLossWithLabelSmoothing(
+    #     alpha=alpha,
+    #     gamma=gamma,
+    #     label_smoothing=label_smoothing,
+    # )
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -465,7 +504,7 @@ def _plot_threshold_search(results, out_dir):
     import matplotlib.pyplot as plt
 
     thresholds = [r['threshold'] for r in results]
-    f1_scores = [r['f1'] for r in results]
+    f1_scores = [r['f1_macro'] for r in results]
     precisions = [r['precision'] for r in results]
     recalls = [r['recall'] for r in results]
 
@@ -552,7 +591,13 @@ def evaluate_model(
     return metrics
 
 
-def find_optimal_threshold(model, val_loader, device, class_idx=1):
+def find_optimal_threshold(model,
+                           val_loader,
+                           device,
+                           class_idx=1,
+                           target_precision=0.85,
+                           target_recall=0.85,
+                       ):
     """
     在验证集上寻找最优决策阈值
     """
@@ -582,7 +627,7 @@ def find_optimal_threshold(model, val_loader, device, class_idx=1):
     y_scores = np.array(y_scores)
 
     # 网格搜索最优阈值
-    thresholds = np.arange(0.1, 0.95, 0.05)
+    thresholds = np.arange(0.1, 0.95, 0.001)
     results = []
 
     for threshold in thresholds:
@@ -591,31 +636,53 @@ def find_optimal_threshold(model, val_loader, device, class_idx=1):
         precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
         recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
         f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+        f1_label1 = f1_score(y_true, y_pred, pos_label=1)
+        precision_label1 =  precision_score(y_true,y_pred,pos_label=1,zero_division=0)
+        recall_label1 = recall_score(y_true,y_pred,pos_label=1,zero_division=0)
 
         results.append({
             'threshold': threshold,
-            'f1': f1,
+            'f1': f1_label1,
+            "precision_label1": precision_label1,
+            "recall_label1": recall_label1,
+            "f1_macro": f1,
             'precision': precision,
             'recall': recall,
         })
-        # precision = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_pred == 1) + 1e-8)
-        # recall = np.sum((y_true == 1) & (y_pred == 1)) / (np.sum(y_true == 1) + 1e-8)
-        # f1 = 2 * precision * recall / (precision + recall + 1e-8)
-        #
-        # results.append({
-        #     'threshold': threshold,
-        #     'f1': f1,
-        #     'precision': precision,
-        #     'recall': recall,
-        # })
+
+    feasible = [
+        row for row in results
+        if row["precision_label1"] >= target_precision
+           and row["recall_label1"] >= target_recall
+    ]
+
+    if feasible:
+        best = max(
+            feasible,
+            key=lambda row: row["f1"],
+        )
+        print("找到满足 P>=0.85 且 R>=0.85 的验证阈值")
+    else:
+        best = max(
+            results,
+            key=lambda row: min(
+                row["precision_label1"],
+                row["recall_label1"],
+            ),
+        )
+        print("验证集上不存在同时满足 P>=0.85、R>=0.85 的阈值")
+        print("当前最平衡的结果为：")
+
+    print(best)
 
     # 选择F1最高的阈值
     best_result = max(results, key=lambda x: x['f1'])
 
     print(f"\n[THRESHOLD] 最优阈值: {best_result['threshold']:.2f}")
-    print(f"  F1: {best_result['f1']:.4f}")
-    print(f"  Precision: {best_result['precision']:.4f}")
-    print(f"  Recall: {best_result['recall']:.4f}")
+    print(f"  F1_class1: {best_result['f1']:.4f}")
+    print(f"  F1_macro: {best_result['f1_macro']:.4f}")
+    print(f"  Precision_macro: {best_result['precision']:.4f}")
+    print(f"  Recall_macro: {best_result['recall']:.4f}")
 
     return best_result['threshold'], results
 
@@ -627,16 +694,22 @@ def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] 
     print(f"{'Stage1 Transformer - 测试集结果':^50}")
     print("=" * 50)
     print(f"  Loss:              {test_metrics.get('loss', 0):.4f}")
+    print(f"  F1_label1:         {test_metrics.get('f1_label1', 0):.4f}")
+    print(f"  Precision_label1:  {test_metrics.get('precision_label1', 0):.4f}")
+    print(f"  Recall_label1:     {test_metrics.get('recall_label1', 0):.4f}")
     print(f"  F1 (Macro):        {test_metrics.get('macro_f1', 0):.4f}")
+    print(f"  Recall (Macro):    {test_metrics.get('macro_recall', 0):.4f}")
+    print(f"  Precision (Macro): {test_metrics.get('macro_precision', 0):.4f}")
     print(f"  F1 (Weighted):     {test_metrics.get('weighted_f1', 0):.4f}")
     print(f"  AUC (OvR Macro):   {test_metrics.get('auc', 0):.4f}")
+    print(f"  PR_AUC:            {test_metrics.get('pr_auc', 0):.4f}")
     print(f"{'=' * 50}")
 
     # 各类别 F1
     if "per_class_f1" in test_metrics:
         per_class = test_metrics["per_class_f1"]
         f1_sorted = sorted(per_class.items(), key=lambda x: x[1], reverse=True)
-        print("\n[RESULT] 各类别 F1 (降序):")
+        print("\n[RESULT] 测试集 --- 各类别 F1 (降序):")
         for cls, f1 in f1_sorted:
             label_name = class_names[int(cls)] if class_names else cls
             print(f"  {label_name:<30s}: {f1:.4f}")

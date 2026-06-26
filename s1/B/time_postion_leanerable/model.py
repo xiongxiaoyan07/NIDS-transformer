@@ -74,8 +74,8 @@ class TimeAwareEncoding(nn.Module):
         self.time_data_format = time_data_format  # 'log1p' or 'raw'
         self.d_model = d_model
         self.dropout = nn.Dropout(dropout)
-        # self.lambda_pos = nn.Parameter(torch.tensor(1.0))
-        # self.lambda_time = nn.Parameter(torch.tensor(1.0))
+        self.lambda_pos = nn.Parameter(torch.tensor(1.0))
+        self.lambda_time = nn.Parameter(torch.tensor(1.0))
 
         # Pre-compute div_term for sinusoidal encoding
         # div_term = 1 / 10000^(2j/d_model)
@@ -115,7 +115,7 @@ class TimeAwareEncoding(nn.Module):
 
         return pe
 
-    def _compute_time_feature(self, time_log, mask):
+    def _compute_time_feature(self, time_log):
         """
         兼容两种 time 数据格式
 
@@ -136,7 +136,6 @@ class TimeAwareEncoding(nn.Module):
         #     # 假设已经是原始间隔
         #     time_intervals = time_log
         # 所有的time的数据在预处理的时候都加上了log1p,所以这里就直接反推原始间隔，不然配置太多改动太大
-        time_log = time_log * mask.float()
         # 反推原始间隔
         time_intervals = torch.expm1(time_log)
         # # 去掉时间反推
@@ -173,11 +172,11 @@ class TimeAwareEncoding(nn.Module):
         # Combine position and time: pos + p
         # pos: [L, 1] -> [1, L, 1]
         # p: [B, L] -> [B, L, 1]
-        combined = pos.unsqueeze(0) + p.unsqueeze(-1)  # [B, L, 1]
-        # combined = (
-        #         self.lambda_pos * pos.unsqueeze(0)
-        #         + self.lambda_time * p.unsqueeze(-1)
-        # )
+        # combined = pos.unsqueeze(0) + p.unsqueeze(-1)  # [B, L, 1]
+        combined = (
+                self.lambda_pos * pos.unsqueeze(0)
+                + self.lambda_time * p.unsqueeze(-1)
+        )
 
         # Apply sinusoidal functions
         arg = combined * self.div_term  # [B, L, d_model//2]
@@ -200,12 +199,7 @@ class TimeAwareEncoding(nn.Module):
         te[:, :, 1::2] = torch.cos(arg)
         return te
 
-    def forward(
-            self,
-            e: torch.Tensor,
-            time_log: torch.Tensor,
-            mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    def forward(self, e: torch.Tensor, time_log: torch.Tensor) -> torch.Tensor:
         """
         Args:
             e:
@@ -215,11 +209,6 @@ class TimeAwareEncoding(nn.Module):
             time_log:
                 log(1 + flow_iat_us).
                 Shape: [B, L]
-
-            mask:
-                Shape: [B, L]
-                True  = real packet
-                False = padding
 
         Returns:
             Encoded packet sequence.
@@ -231,140 +220,122 @@ class TimeAwareEncoding(nn.Module):
         if time_log.dim() == 3:
             time_log = time_log.squeeze(-1)
 
-        # 如果外部没有传 mask，就默认全是真实 packet
-        if mask is None:
-            mask = torch.ones(
-                batch_size,
-                seq_len,
-                device=e.device,
-                dtype=torch.bool,
-            )
-        else:
-            mask = mask.bool().to(e.device)
-
         if self.use_positional_encoding and self.use_time_encoding:
             # Full time-aware encoding: TE(pos + p)
-            p = self._compute_time_feature(time_log, mask)  # [B, L]
+            # Step 1: Compute smoothed time feature p
+            p = self._compute_time_feature(time_log)  # [B, L]
 
             # Step 2: Compute time-aware encoding
             te = self._time_aware_encoding(seq_len, p)  # [B, L, d_model]
 
-            # padding 位置的 encoding 清零
-            te = te * mask.unsqueeze(-1).to(dtype=te.dtype)
-
+            # Step 3: Add to input embeddings
             e = e + te
 
         elif self.use_positional_encoding:
-            pe = self.pe[:, :seq_len, :].to(
-                device=e.device,
-                dtype=e.dtype,
-            )
-
-            pe = pe * mask.unsqueeze(-1).to(dtype=pe.dtype)
-
-            e = e + pe
+            # Position only: traditional PE (p=0)
+            # Use precomputed PE for efficiency
+            e = e + self.pe[:, :seq_len, :]
 
         elif self.use_time_encoding:
-            p = self._compute_time_feature(time_log, mask)
-
+            # Time only: no position index, only time feature
+            p = self._compute_time_feature(time_log)
             te = self._time_only_encoding(seq_len, p)
-
-            te = te * mask.unsqueeze(-1).to(dtype=te.dtype)
-
             e = e + te
+
+        # Note: if both are False, no encoding is added
 
         return self.dropout(e)
 
 
+class AttentionPooling(nn.Module):
+    """
+    Learned attention pooling, replacing simple masked_mean_pool
+    """
+
+    def __init__(self, d_model):
+        super().__init__()
+        self.attention = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.Tanh(),
+            nn.Linear(d_model // 2, 1)
+        )
+
+    def forward(self, h, mask):
+        # h: [B, L, D], mask: [B, L]
+        attn_weights = self.attention(h).squeeze(-1)  # [B, L]
+
+        # Set very small weights for padding positions
+        attn_weights = attn_weights.masked_fill(~mask.bool(), -1e4)
+        # attn_weights = attn_weights.masked_fill(~mask.bool(), -1e9)
+        attn_weights = torch.softmax(attn_weights, dim=-1).unsqueeze(-1)  # [B, L, 1]
+
+        # Weighted sum
+        z = (h * attn_weights).sum(dim=1)  # [B, D]
+        return z
+
 # class AttentionPooling(nn.Module):
-#     """
-#     Learned attention pooling, replacing simple masked_mean_pool
-#     """
-#
-#     def __init__(self, d_model):
+#     def __init__(self,d_model: int,dropout: float):
 #         super().__init__()
+#
+#         hidden = max(16,d_model // 2,)
+#
 #         self.attention = nn.Sequential(
-#             nn.Linear(d_model, d_model // 2),
-#             nn.Tanh(),
-#             nn.Linear(d_model // 2, 1)
+#             nn.Linear(d_model, hidden),
+#             nn.GELU(),
+#             nn.Linear(hidden, 1),
 #         )
 #
-#     def forward(self, h, mask):
-#         # h: [B, L, D], mask: [B, L]
-#         attn_weights = self.attention(h).squeeze(-1)  # [B, L]
+#         self.fusion = nn.Sequential(
+#             nn.Linear(3 * d_model,d_model,),
+#             nn.LayerNorm(d_model),
+#             nn.GELU(),
+#             nn.Dropout(dropout),
+#         )
 #
-#         # Set very small weights for padding positions
-#         attn_weights = attn_weights.masked_fill(~mask.bool(), -1e4)
-#         # attn_weights = attn_weights.masked_fill(~mask.bool(), -1e9)
-#         attn_weights = torch.softmax(attn_weights, dim=-1).unsqueeze(-1)  # [B, L, 1]
+#     def forward(
+#         self,
+#         h: torch.Tensor,
+#         mask: torch.Tensor,
+#     ) -> torch.Tensor:
+#         mask_bool = mask.bool()
 #
-#         # Weighted sum
-#         z = (h * attn_weights).sum(dim=1)  # [B, D]
-#         return z
-
-class AttentionPooling(nn.Module):
-    def __init__(self,d_model: int,dropout: float):
-        super().__init__()
-
-        hidden = max(16,d_model // 2,)
-
-        self.attention = nn.Sequential(
-            nn.Linear(d_model, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, 1),
-        )
-
-        self.fusion = nn.Sequential(
-            nn.Linear(3 * d_model,d_model,),
-            nn.LayerNorm(d_model),
-            nn.GELU(),
-            nn.Dropout(dropout),
-        )
-
-    def forward(
-        self,
-        h: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
-        mask_bool = mask.bool()
-
-        mask_f = (mask_bool.unsqueeze(-1).to(dtype=h.dtype))
-
-        # Attention pooling
-        scores = (self.attention(h).squeeze(-1))
-
-        scores = scores.masked_fill(~mask_bool,torch.finfo(scores.dtype).min)
-
-        weights = torch.softmax(scores,dim=-1).unsqueeze(-1)
-
-        attention_pool = (h * weights).sum(dim=1)
-
-        # Mean pooling
-        count = mask_f.sum(dim=1).clamp(min=1.0)
-
-        mean_pool = (h * mask_f).sum(dim=1) / count
-
-        # Max pooling
-        max_input = h.masked_fill(~mask_bool.unsqueeze(-1), torch.finfo(h.dtype).min)
-
-        max_pool = max_input.max(dim=1).values
-
-        max_pool = torch.where(
-            torch.isfinite(max_pool),
-            max_pool,
-            torch.zeros_like(max_pool),
-        )
-
-        combined = torch.cat(
-            [
-                attention_pool,
-                mean_pool,
-                max_pool,
-            ],
-            dim=-1,
-        )
-
-        return self.fusion(combined)
+#         mask_f = (mask_bool.unsqueeze(-1).to(dtype=h.dtype))
+#
+#         # Attention pooling
+#         scores = (self.attention(h).squeeze(-1))
+#
+#         scores = scores.masked_fill(~mask_bool,torch.finfo(scores.dtype).min)
+#
+#         weights = torch.softmax(scores,dim=-1).unsqueeze(-1)
+#
+#         attention_pool = (h * weights).sum(dim=1)
+#
+#         # Mean pooling
+#         count = mask_f.sum(dim=1).clamp(min=1.0)
+#
+#         mean_pool = (h * mask_f).sum(dim=1) / count
+#
+#         # Max pooling
+#         max_input = h.masked_fill(~mask_bool.unsqueeze(-1), torch.finfo(h.dtype).min)
+#
+#         max_pool = max_input.max(dim=1).values
+#
+#         max_pool = torch.where(
+#             torch.isfinite(max_pool),
+#             max_pool,
+#             torch.zeros_like(max_pool),
+#         )
+#
+#         combined = torch.cat(
+#             [
+#                 attention_pool,
+#                 mean_pool,
+#                 max_pool,
+#             ],
+#             dim=-1,
+#         )
+#
+#         return self.fusion(combined)
 
 class FlowFeatureEncoder(nn.Module):
     """
@@ -434,7 +405,7 @@ class FlowFusion(nn.Module):
         else:
             raise ValueError(f"Unsupported fusion method: {fusion_method}")
 
-    def forward(self, pooled: torch.Tensor, flow_encoded: torch.Tensor) -> Any | None:
+    def forward(self, pooled: torch.Tensor, flow_encoded: torch.Tensor) -> torch.Tensor:
         """
         Args:
             pooled: [B, d_model] - representation from Transformer + pooling
@@ -472,6 +443,9 @@ def build_cls_head(d_model: int,cls_head_config: int, dropout: float, num_classe
     Keep the classifier style close to your original Stage2Transformer.
     """
     # ---- Classifier ----
+    # dropout = float(model_cfg.get("dropout", 0.3))
+    # cls_head_config = int(model_cfg.get("cls_head", 0))
+    # print("[INFO] Stage1Transformer.__init__*********** cls_head_config=",cls_head_config)
     if cls_head_config == 2:
         return nn.Sequential(
             nn.LayerNorm(d_model),
@@ -672,7 +646,7 @@ class Stage1TimeAwareTransformer(nn.Module):
         e = self.projection(x)  # [B, L, d_model]
 
         # 2. Time-aware encoding
-        e = self.time_encoding(e, time_log, mask)  # [B, L, d_model]
+        e = self.time_encoding(e, time_log)  # [B, L, d_model]
 
         # 3. Transformer encoding
         src_key_padding_mask = ~mask.bool()
