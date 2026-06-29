@@ -5,7 +5,7 @@ Training and evaluation loop.
 from __future__ import annotations
 
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 import torch
 # ============================================================================
@@ -17,7 +17,8 @@ import seaborn as sns
 import numpy as np
 import warnings
 import optuna
-from sklearn.metrics import f1_score, precision_score, recall_score
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score, average_precision_score, \
+    precision_recall_curve
 
 from torch import nn
 
@@ -205,6 +206,58 @@ def train_model(
         nn.CrossEntropyLoss(),  # 评估时不需要特殊的损失函数
         device,
         threshold=best_threshold
+    )
+    # 计算F1上限
+    print("[INFO] --- train_model --- 计算F1上限")
+    val_labels, val_probs = collect_labels_and_probabilities(
+        model,
+        loaders["val"],
+        device,
+    )
+
+    test_labels, test_probs = collect_labels_and_probabilities(
+        model,
+        loaders["test"],
+        device,
+    )
+
+    # 1. 验证集当前模型的阈值上限
+    val_oracle = find_exact_f1_ceiling(
+        val_labels,
+        val_probs,
+    )
+
+    # 2. 合法评估：使用验证集阈值测试
+    test_at_val_threshold = metrics_at_threshold(
+        test_labels,
+        test_probs,
+        val_oracle["threshold"],
+    )
+
+    # 3. 测试集阈值上限，只用于诊断
+    test_oracle = find_exact_f1_ceiling(
+        test_labels,
+        test_probs,
+    )
+
+    print("\n========== F1 CEILING DIAGNOSIS ==========")
+
+    print("\n[VAL ORACLE]")
+    for key, value in val_oracle.items():
+        print(f"{key}: {value}")
+
+    print("\n[TEST AT VAL THRESHOLD]")
+    for key, value in test_at_val_threshold.items():
+        print(f"{key}: {value}")
+
+    print("\n[TEST ORACLE - DIAGNOSTIC ONLY]")
+    for key, value in test_oracle.items():
+        print(f"{key}: {value}")
+
+    print(
+        "\nThreshold transfer gap:",
+        test_oracle["f1_label1"]
+        - test_at_val_threshold["f1_label1"],
     )
     # 绘制阈值搜索结果
     _plot_threshold_search(threshold_results, out_dir)
@@ -814,3 +867,117 @@ def plot_per_class_f1(per_class_f1: Dict[str, float], class_names: List[str],
     plt.savefig(save_path, dpi=200, bbox_inches='tight')
     plt.show()
     print(f"[INFO] 各类别 F1 图已保存: {save_path}")
+
+
+@torch.inference_mode()
+def collect_labels_and_probabilities(
+        model: torch.nn.Module,
+        loader,
+        device: torch.device,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """收集真实标签和 class-1 概率。"""
+    model.eval()
+
+    all_labels = []
+    all_probs = []
+
+    for batch in loader:
+        x = batch["x"].to(device, non_blocking=True)
+        time_log = batch["time"].to(device, non_blocking=True)
+        mask = batch["mask"].to(device, non_blocking=True)
+
+        flow_feats = batch.get("flow_feats")
+        if flow_feats is not None:
+            flow_feats = flow_feats.to(device, non_blocking=True)
+
+        logits = model(
+            x,
+            time_log,
+            mask,
+            flow_feats=flow_feats,
+        )
+
+        probs_class1 = torch.softmax(logits, dim=-1)[:, 1]
+
+        all_labels.append(batch["label"].detach().cpu().numpy())
+        all_probs.append(probs_class1.detach().cpu().numpy())
+
+    labels = np.concatenate(all_labels).astype(np.int64)
+    probabilities = np.concatenate(all_probs).astype(np.float64)
+
+    return labels, probabilities
+
+def metrics_at_threshold(
+        labels: np.ndarray,
+        probabilities: np.ndarray,
+        threshold: float,
+) -> Dict[str, Any]:
+    predictions = (probabilities >= threshold).astype(np.int64)
+
+    tp = int(np.sum((labels == 1) & (predictions == 1)))
+    fp = int(np.sum((labels == 0) & (predictions == 1)))
+    tn = int(np.sum((labels == 0) & (predictions == 0)))
+    fn = int(np.sum((labels == 1) & (predictions == 0)))
+
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = (
+            2.0 * precision * recall / max(precision + recall, 1e-12)
+    )
+
+    return {
+        "threshold": float(threshold),
+        "precision_label1": float(precision),
+        "recall_label1": float(recall),
+        "f1_label1": float(f1),
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+    }
+
+def find_exact_f1_ceiling(
+        labels: np.ndarray,
+        probabilities: np.ndarray,
+) -> Dict[str, Any]:
+    """
+    找到当前概率排序下，通过单一阈值能够获得的最高 class-1 F1。
+
+    这是 threshold oracle，不代表模型可部署性能。
+    """
+    precision, recall, thresholds = precision_recall_curve(
+        labels,
+        probabilities,
+    )
+
+    # precision/recal 比 thresholds 多一个元素。
+    precision_t = precision[:-1]
+    recall_t = recall[:-1]
+
+    f1 = (
+            2.0
+            * precision_t
+            * recall_t
+            / np.maximum(precision_t + recall_t, 1e-12)
+    )
+
+    best_index = int(np.nanargmax(f1))
+    best_threshold = float(thresholds[best_index])
+
+    result = metrics_at_threshold(
+        labels,
+        probabilities,
+        best_threshold,
+    )
+
+    result.update({
+        "roc_auc": float(roc_auc_score(labels, probabilities)),
+        "pr_auc": float(
+            average_precision_score(labels, probabilities)
+        ),
+        "num_samples": int(len(labels)),
+        "num_positive": int(np.sum(labels == 1)),
+        "num_negative": int(np.sum(labels == 0)),
+    })
+
+    return result

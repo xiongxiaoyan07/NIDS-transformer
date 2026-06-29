@@ -14,7 +14,6 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .build_mlp import build_mlp
 
@@ -431,6 +430,9 @@ class FlowFusion(nn.Module):
                 nn.LayerNorm(d_model),
                 nn.Dropout(dropout),
             )
+        elif fusion_method == "FiLM":
+            self.gamma = nn.Linear(d_model, d_model)
+            self.beta = nn.Linear(d_model, d_model)
         else:
             raise ValueError(f"Unsupported fusion method: {fusion_method}")
 
@@ -461,6 +463,11 @@ class FlowFusion(nn.Module):
             pooled_proj = self.pooled_proj(pooled)  # [B, d_model]
             flow_proj = self.flow_proj(flow_encoded)  # [B, d_model]
             return pooled_proj + flow_proj  # [B, d_model]
+        elif self.fusion_method == "FiLM":
+            gamma = self.gamma(flow_encoded)
+            beta = self.beta(flow_encoded)
+            return pooled * (1 + gamma) + beta
+        return None
 
 
 # ============================================================
@@ -563,7 +570,8 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         print(f"[INFO]------model --- __init__---d_model={d_model}, nhead={nhead}, num_layers={num_layers}, "
               f"dim_feedforward={dim_feedforward}, dropout={dropout}, max_seq_len={max_seq_len}, use_positional_encoding={use_positional_encoding}, "
-              f"use_time_encoding={use_time_encoding}")
+              f"use_time_encoding={use_time_encoding}, use_flow_fusion={self.use_flow_fusion}, fusion_method={self.fusion_method}"
+              f"fusion_method={self.fusion_method}")
         # Time encoding alpha (smoothing factor)
         time_encoding_cfg = model_cfg.get("time_encoding", {})
         alpha = float(time_encoding_cfg.get("alpha", 1e-07))
@@ -704,12 +712,3 @@ class Stage1TimeAwareTransformer(nn.Module):
         h = h * mask_float
         denom = mask_float.sum(dim=1).clamp(min=1.0)
         return h.sum(dim=1) / denom
-
-    def get_model_info(self) -> Dict[str, Any]:
-        """Return model configuration info for debugging."""
-        return {
-            "mode": "inject_to_packets" if self.inject_to_packets
-            else ("hierarchical_fusion" if self.use_flow_fusion else "packet_only"),
-            "use_flow_features": self.use_flow_fusion,
-            "fusion_method": self.fusion_method if self.use_flow_fusion else None,
-        }
