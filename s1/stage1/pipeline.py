@@ -299,7 +299,7 @@ def build_dataloaders(
         "trainNoSampler": DataLoader(
             datasets["train"],
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
@@ -309,7 +309,7 @@ def build_dataloaders(
         "val": DataLoader(
             datasets["val"],
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
@@ -319,7 +319,7 @@ def build_dataloaders(
         "test": DataLoader(
             datasets["test"],
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=False,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
