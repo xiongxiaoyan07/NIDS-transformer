@@ -469,7 +469,49 @@ class FlowFusion(nn.Module):
             return pooled * (1 + gamma) + beta
         return None
 
+class ResidualGatedFlowFusion(nn.Module):
+    """
+    Packet-biased residual fusion.
 
+    初始时 z_final ≈ z_packet，避免 flow branch 破坏已经很强的 B。
+    flow 信息只有在确实有帮助时，才以 residual delta 的方式加入。
+    """
+
+    def __init__(self, d_model: int, dropout: float, scale_init: float = -4.0):
+        super().__init__()
+
+        self.flow_delta = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model),
+        )
+
+        self.gate_linear = nn.Linear(d_model * 2, d_model)
+        nn.init.constant_(self.gate_linear.bias, 2.0)  # 初始 gate ≈ 0.88，偏向 packet branch
+
+        self.gate = nn.Sequential(
+            self.gate_linear,
+            nn.Sigmoid(),
+        )
+
+        # sigmoid(-4) ≈ 0.018，初始 residual 很小
+        self.scale_logit = nn.Parameter(torch.tensor(float(scale_init)))
+
+        self.out_norm = nn.LayerNorm(d_model)
+
+    def forward(self, pooled: torch.Tensor, flow_encoded: torch.Tensor) -> torch.Tensor:
+        concat_feat = torch.cat([pooled, flow_encoded], dim=-1)
+
+        delta = self.flow_delta(concat_feat)
+        gate = self.gate(concat_feat)
+
+        scale = torch.sigmoid(self.scale_logit)
+
+        fused = pooled + scale * gate * delta
+
+        return self.out_norm(fused)
 # ============================================================
 # Shared classifier builder
 # ============================================================
@@ -618,11 +660,18 @@ class Stage1TimeAwareTransformer(nn.Module):
                     dropout=dropout
                 )
 
-                self.flow_fusion = FlowFusion(
-                    d_model=d_model,
-                    fusion_method=self.fusion_method,
-                    dropout=dropout
-                )
+                if self.fusion_method == "residual_gated":
+                    self.flow_fusion = ResidualGatedFlowFusion(
+                        d_model=d_model,
+                        dropout=dropout,
+                        scale_init=float(flow_fusion_cfg.get("residual_scale_init", -4.0)),
+                    )
+                else:
+                    self.flow_fusion = FlowFusion(
+                        d_model=d_model,
+                        fusion_method=self.fusion_method,
+                        dropout=dropout
+                    )
 
                 print(f"[INFO---model.__init__] 方案C - 分层特征注入已启用")
                 print(f"[INFO]   Flow特征维度: {flow_feature_dim}")

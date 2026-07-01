@@ -253,11 +253,27 @@ def build_dataloaders(
     train_labels = train_dataset.labels
 
     # 计算样本权重
-    class_counts = np.bincount(train_labels, minlength=2)
-    class_weights = 1.0 / class_counts
-    sample_weights = class_weights[train_labels]
-    print("计算样本权重: class_counts", class_counts)
-    print("计算样本权重: sample_weights", sample_weights)
+    # controlled weighted sampler
+    class_counts = np.bincount(train_labels.astype(int), minlength=2)
+    n0, n1 = int(class_counts[0]), int(class_counts[1])
+    sampler_pos_fraction = train_cfg.get("sampler_pos_fraction", None)
+    if sampler_pos_fraction is None:
+        # old behavior: approximately balanced 50/50
+        class_weights = 1.0 / np.maximum(class_counts, 1)
+        sample_weights = class_weights[train_labels.astype(int)]
+        print("[INFO] sampler mode: inverse-frequency balanced")
+    else:
+        p = float(sampler_pos_fraction)
+        if not 0.0 < p < 1.0:
+            raise ValueError("sampler_pos_fraction must be between 0 and 1")
+
+        w0 = (1.0 - p) / max(n0, 1)
+        w1 = p / max(n1, 1)
+        sample_weights = np.where(train_labels.astype(int) == 1, w1, w0)
+
+        print(f"[INFO] sampler mode: controlled positive fraction={p}")
+        print(f"[INFO] class_counts: class0={n0}, class1={n1}")
+        print(f"[INFO] sample weight class0={w0:.8e}, class1={w1:.8e}")
 
     # 固定种子
     g = torch.Generator()
@@ -283,7 +299,7 @@ def build_dataloaders(
         "trainNoSampler": DataLoader(
             datasets["train"],
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
@@ -293,7 +309,7 @@ def build_dataloaders(
         "val": DataLoader(
             datasets["val"],
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,
@@ -303,7 +319,7 @@ def build_dataloaders(
         "test": DataLoader(
             datasets["test"],
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=num_workers,
             worker_init_fn=worker_init_fn,  # ⚠️ 设置 worker 种子
             collate_fn=custom_collate_fn,

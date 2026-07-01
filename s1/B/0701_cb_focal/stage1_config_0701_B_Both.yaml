@@ -1,0 +1,270 @@
+# Stage1 configuration.
+# 你可以通过修改这个文件决定 flow-level 和 packet-level 到底用哪些字段。
+
+seed: 130
+strict_schema: false
+
+data:
+  flow_id_col: flow_id
+  label_col: label
+  packet_time_col: timestamp_us
+  packet_iat_col: flow_iat_us
+  flow_time_col: flow_start_timestamp_us
+  # Stage2 context metadata columns
+  source_id_col: source_ip
+  destination_id_col: destination_ip
+
+sequence:
+  max_seq_len: 64
+  # options: head head_tail random
+  strategy: head
+
+split:
+  # chronological / stratified
+  method: chronological
+  stratify: false
+#  method: stratified
+#  stratify: true
+  train_size: 0.70
+  val_size: 0.10
+  test_size: 0.20
+  boundary_tolerance: 0.05
+
+features:
+  # 绝对时间字段一般不推荐作为模型输入，避免数据泄漏。
+  # flow_iat_us 会被转为 log1p 后用于 temporal feature 和 time-aware encoding。
+  packet:
+    categorical:
+      - ip_version
+      - protocol
+#      - l7_proto
+      - icmp_type
+      - icmp_code
+    numerical:
+      - pkt_len
+      - ip_len
+      - payload_len
+      - ttl_or_hop_limit
+      - tcp_window
+      - tcp_header_len
+      - udp_len
+#      - log_flow_iat_us
+    binary:
+      - direction
+      - has_tcp
+      - has_udp
+      - has_icmp
+      - tcp_fin
+      - tcp_syn
+      - tcp_rst
+      - tcp_psh
+      - tcp_ack_flag
+      - tcp_urg
+      - tcp_ece
+      - tcp_cwr
+
+  # flow-level 字段完全可配置。
+  # 不建议默认使用 source_ip / destination_ip，因为 IP one-hot 维度大且容易产生环境偏差。
+  flow:
+#    categorical:
+#      - protocol
+#      - has_init_win_bytes_forward
+#      - has_init_win_bytes_backward
+    numerical:
+      - flow_duration
+      - total_fwd_packets
+      - total_backward_packets
+      - total_length_of_fwd_packets
+      - total_length_of_bwd_packets
+      - fwd_packet_length_max
+      - fwd_packet_length_min
+      - fwd_packet_length_mean
+      - fwd_packet_length_std
+      - bwd_packet_length_max
+      - bwd_packet_length_min
+      - bwd_packet_length_mean
+      - bwd_packet_length_std
+      - flow_bytes_per_s
+      - flow_packets_per_s
+      - flow_iat_mean
+      - flow_iat_std
+      - flow_iat_max
+      - flow_iat_min
+      - fwd_iat_total
+      - fwd_iat_mean
+      - fwd_iat_std
+      - fwd_iat_max
+      - fwd_iat_min
+      - bwd_iat_total
+      - bwd_iat_mean
+      - bwd_iat_std
+      - bwd_iat_max
+      - bwd_iat_min
+      - fwd_psh_flags
+      - bwd_psh_flags
+      - fwd_urg_flags
+      - bwd_urg_flags
+      - fwd_header_length
+      - bwd_header_length
+      - fwd_packets_per_s
+      - bwd_packets_per_s
+      - min_packet_length
+      - max_packet_length
+      - packet_length_mean
+      - packet_length_std
+      - packet_length_variance
+      - fin_flag_count
+      - syn_flag_count
+      - rst_flag_count
+      - psh_flag_count
+      - ack_flag_count
+      - urg_flag_count
+      - cwe_flag_count
+      - ece_flag_count
+      - down_up_ratio
+      - average_packet_size
+      - avg_fwd_segment_size
+      - avg_bwd_segment_size
+      - init_win_bytes_forward
+      - init_win_bytes_backward
+      - act_data_pkt_fwd
+      - min_seg_size_forward
+      - active_mean
+      - active_std
+      - active_max
+      - active_min
+      - idle_mean
+      - idle_std
+      - idle_max
+      - idle_min
+    binary:
+      - has_init_win_bytes_forward
+      - has_init_win_bytes_backward
+
+
+  flow_fusion:
+#    方案A: [packet_feats; flow_feats_tiled] → 每个packet都包含flow信息
+#    enabled: true
+#    inject_to_packets: true   # true=拼接到packet
+#    method: "concat"           # 方案A不需要此参数，但保持兼容  concat add gated
+#    方案B [packet_feats] → 不使用flow信息
+    "enabled": false
+    "inject_to_packets": false
+    "method": "none"
+#    方案C-[packet_feats] + [flow_feats_separate] → 通过融合层注入
+#    "enabled": true
+#    "inject_to_packets": false
+#    "method": "gated"
+
+preprocessing:
+  numerical:
+    scaler: robust     # 可选: standard / robust / none
+
+    clip:
+      enabled: true
+      lower_quantile: 0.001
+      upper_quantile: 0.999
+
+    log1p:
+      packet:
+        - pkt_len
+        - ip_len
+        - payload_len
+#        - ttl_or_hop_limit
+        - tcp_window
+        - tcp_header_len
+        - udp_len
+
+      flow:
+        - flow_duration
+        - total_fwd_packets
+        - total_backward_packets
+        - total_length_of_fwd_packets
+        - total_length_of_bwd_packets
+        - fwd_packet_length_max
+        - fwd_packet_length_min
+        - fwd_packet_length_mean
+        - fwd_packet_length_std
+        - bwd_packet_length_max
+        - bwd_packet_length_min
+        - bwd_packet_length_mean
+        - bwd_packet_length_std
+        - flow_bytes_per_s
+        - flow_packets_per_s
+        - flow_iat_mean
+        - flow_iat_std
+        - flow_iat_max
+        - flow_iat_min
+        - fwd_iat_total
+        - fwd_iat_mean
+        - fwd_iat_std
+        - fwd_iat_max
+        - fwd_iat_min
+        - bwd_iat_total
+        - bwd_iat_mean
+        - bwd_iat_std
+        - bwd_iat_max
+        - bwd_iat_min
+        - fwd_header_length
+        - bwd_header_length
+        - fwd_packets_per_s
+        - bwd_packets_per_s
+        - min_packet_length
+        - max_packet_length
+        - packet_length_mean
+        - packet_length_std
+        - packet_length_variance
+        - average_packet_size
+        - avg_fwd_segment_size
+        - avg_bwd_segment_size
+        - init_win_bytes_forward
+        - init_win_bytes_backward
+        - act_data_pkt_fwd
+        - active_mean
+        - active_std
+        - active_max
+        - active_min
+        - idle_mean
+        - idle_std
+        - idle_max
+        - idle_min
+
+model:
+  d_model: 128          # 回退到128（数据量不足以支撑256）
+  nhead: 4
+  num_layers: 2         # 回退到2层（减少过拟合）
+  dim_feedforward: 256  # 回退到512
+  dropout: 0.2          # 增加dropout防止过拟合
+  use_positional_encoding: true
+  use_time_encoding: true
+  cls_head: 2
+  # 新增：时间编码配置
+  time_encoding:
+    alpha: 1.0e-07  # 平滑因子（论文默认值
+
+training:
+  epochs: 500
+  batch_size: 128
+  lr: 0.0001         # 降低学习率（更稳定的训练）
+  weight_decay: 0.0005  # 增加权重衰减（防止过拟合）
+  num_workers: 2
+  early_stop_patience: 15  # 增加patience（给模型更多时间）
+  monitor_metric: pr_auc
+  monitor_mode: max
+  threshold_search: true
+  alpha_mode: mild
+  focal_gamma: 1.5
+  label_smoothing: 0
+  threshold_beta: 1
+  use_weighted_sampler: false #Use WeightedRandomSampler True/False
+#  min_precision_class1: 0.80
+#  min_recall_class1: 0.80
+  loss: cb_focal #focal ce(cross entropy) asymmetric cb_focal hard_neg_ce
+#  asymmetric
+  asl_gamma_pos: 0.0
+  asl_gamma_neg: 2.0
+  asl_alpha_pos: 0.55
+#  cb_focal
+  cb_beta: 0.999
+#  hard_neg_ce
+  neg_keep_ratio: 0.30

@@ -24,7 +24,8 @@ from torch import nn
 
 warnings.filterwarnings('ignore')
 
-from .losses import FocalLoss, compute_class_alpha, FocalLossWithLabelSmoothing
+from .losses import FocalLoss, compute_class_alpha, FocalLossWithLabelSmoothing, AsymmetricFocalLoss, \
+    ClassBalancedFocalLoss, HardNegativeMiningCELoss
 from .metrics import classification_metrics
 from .utils import save_json
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -66,21 +67,41 @@ def train_model(
 
     alpha_mode = str(train_cfg.get("alpha_mode", "none")).lower()
     loss_name = train_cfg.get("loss", "focal")
-
+    print("[train_model----]loss_name = ",loss_name)
     if alpha_mode == "none":
         alpha = None
 
     elif alpha_mode == "mild":
         # 温和 class1 加权，不像原始 balanced alpha 那么激进
-        alpha = torch.tensor([0.45, 0.55], dtype=torch.float32, device=device)
+        alpha = torch.tensor([1, 1.25], dtype=torch.float32, device=device)
 
     elif alpha_mode == "balanced":
         alpha = compute_class_alpha(train_labels, num_classes=2).to(device)
 
     else:
         raise ValueError(f"Unknown alpha_mode: {alpha_mode}")
+
     if loss_name == "ce":
         criterion = nn.CrossEntropyLoss(weight=alpha)
+    elif loss_name == "asymmetric":
+        criterion = AsymmetricFocalLoss(
+            gamma_pos=float(train_cfg.get("asl_gamma_pos", 0.0)),
+            gamma_neg=float(train_cfg.get("asl_gamma_neg", 2.0)),
+            alpha_pos=float(train_cfg.get("asl_alpha_pos", 0.55)),
+        )
+    elif loss_name == "cb_focal":
+        criterion = ClassBalancedFocalLoss(
+            labels=train_labels,
+            num_classes=2,
+            beta=float(train_cfg.get("cb_beta", 0.999)),
+            gamma=float(train_cfg.get("focal_gamma", 1.5)),
+            label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+        )
+    elif loss_name == "hard_neg_ce":
+        criterion = HardNegativeMiningCELoss(
+            neg_keep_ratio=float(train_cfg.get("neg_keep_ratio", 0.30)),
+            label_smoothing=float(train_cfg.get("label_smoothing", 0.0)),
+        )
     else:
         criterion = FocalLossWithLabelSmoothing(
             alpha=alpha,
@@ -117,8 +138,15 @@ def train_model(
     #     milestones=[warmup_epochs]
     # )
     # 学习率调度
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer, T_max=epochs
+    # )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="max",
+        factor=0.5,
+        patience=5,
+        min_lr=1e-6,
     )
 
     best_score = -1e18
@@ -139,9 +167,11 @@ def train_model(
 
     for epoch in range(1, epochs + 1):
         train_loss = _train_one_epoch(model, train_loader, optimizer, criterion, device, scaler)
-        scheduler.step()  # 添加这行
+        # scheduler.step()  # 添加这行
         val_metrics = evaluate_model(model, loaders["val"], criterion, device)
-
+        scheduler.step(
+            val_metrics["pr_auc"]
+        )
         row = {
             "epoch": epoch,
             "train_loss": float(train_loss),

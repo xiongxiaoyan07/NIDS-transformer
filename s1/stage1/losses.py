@@ -162,3 +162,122 @@ class FocalLossWithLabelSmoothing(nn.Module):
             return torch.tensor(0.0, device=inputs.device, requires_grad=True)
 
         return loss
+
+class AsymmetricFocalLoss(nn.Module):
+    """
+    Binary asymmetric focal loss for 2-class softmax outputs.
+    target: 0/1
+    """
+
+    def __init__(
+            self,
+            gamma_pos=0.0,
+            gamma_neg=2.0,
+            alpha_pos=0.55,
+            eps=1e-8,
+    ):
+        super().__init__()
+        self.gamma_pos = gamma_pos
+        self.gamma_neg = gamma_neg
+        self.alpha_pos = alpha_pos
+        self.eps = eps
+
+    def forward(self, logits, target):
+        prob = torch.softmax(logits, dim=-1)[:, 1]
+        target = target.float()
+
+        prob = torch.clamp(prob, self.eps, 1.0 - self.eps)
+
+        pos_loss = -target * ((1.0 - prob) ** self.gamma_pos) * torch.log(prob)
+        neg_loss = -(1.0 - target) * (prob ** self.gamma_neg) * torch.log(1.0 - prob)
+
+        loss = self.alpha_pos * pos_loss + (1.0 - self.alpha_pos) * neg_loss
+        return loss.mean()
+
+class ClassBalancedFocalLoss(nn.Module):
+    """
+    Class-Balanced Focal Loss using effective number of samples.
+    Suitable for imbalanced binary classification.
+    """
+
+    def __init__(
+        self,
+        labels,
+        num_classes=2,
+        beta=0.999,
+        gamma=1.5,
+        label_smoothing=0.0,
+    ):
+        super().__init__()
+
+        counts = np.bincount(np.asarray(labels, dtype=int), minlength=num_classes)
+        counts = np.maximum(counts, 1)
+
+        effective_num = 1.0 - np.power(beta, counts)
+        weights = (1.0 - beta) / effective_num
+
+        # normalize to mean 1, more stable than sum-to-1
+        weights = weights / np.mean(weights)
+
+        self.alpha = torch.tensor(weights, dtype=torch.float32)
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+
+        print("[INFO] ClassBalancedFocalLoss counts:", counts)
+        print("[INFO] ClassBalancedFocalLoss weights:", weights)
+
+    def forward(self, logits, target):
+        alpha = self.alpha.to(logits.device)
+
+        ce = F.cross_entropy(
+            logits,
+            target,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
+
+        pt = torch.exp(-ce)
+        at = alpha.gather(0, target)
+
+        loss = at * ((1.0 - pt) ** self.gamma) * ce
+        return loss.mean()
+
+class HardNegativeMiningCELoss(nn.Module):
+    """
+    Keep all positive samples and hardest negative samples in each batch.
+    Useful for reducing false positives.
+    """
+
+    def __init__(self, neg_keep_ratio=0.30, label_smoothing=0.0):
+        super().__init__()
+        self.neg_keep_ratio = neg_keep_ratio
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits, target):
+        ce = F.cross_entropy(
+            logits,
+            target,
+            reduction="none",
+            label_smoothing=self.label_smoothing,
+        )
+
+        pos_mask = target == 1
+        neg_mask = target == 0
+
+        pos_loss = ce[pos_mask]
+        neg_loss = ce[neg_mask]
+
+        losses = []
+
+        if pos_loss.numel() > 0:
+            losses.append(pos_loss)
+
+        if neg_loss.numel() > 0:
+            k = max(1, int(self.neg_keep_ratio * neg_loss.numel()))
+            hard_neg_loss, _ = torch.topk(neg_loss, k=k, largest=True)
+            losses.append(hard_neg_loss)
+
+        if len(losses) == 0:
+            return ce.mean()
+
+        return torch.cat(losses).mean()

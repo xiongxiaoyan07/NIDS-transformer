@@ -64,20 +64,26 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
 
     # 不要同时使用 WeightedRandomSampler 和类别加权 Focal Loss 当前配置:use_weighted_sampler = False
     if bool(train_cfg.get("use_weighted_sampler", True)):
-        labels = dataset.labels.astype(int)
-        counts = np.bincount(labels, minlength=2).astype(np.float64)
-        counts = np.maximum(counts, 1.0)
-        class_weights = 1.0 / counts
-        sample_weights = class_weights[labels]
+        labels_np = dataset.labels.astype(int)
 
+        n0 = int((labels_np == 0).sum())
+        n1 = int((labels_np == 1).sum())
+
+        target_pos_frac = float(train_cfg.get("sampler_pos_fraction", 0.20))
+
+        w0 = (1.0 - target_pos_frac) / max(n0, 1)
+        w1 = target_pos_frac / max(n1, 1)
+
+        sample_weights = np.where(labels_np == 1, w1, w0).astype(np.float64)
 
         sampler = WeightedRandomSampler(
-            weights=torch.tensor(sample_weights, dtype=torch.double),
+            weights=torch.as_tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),
             replacement=True,
             generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))), # 固定种子
         )
-        print(f"[INFO] weighted sampler class_counts: {counts.astype(int).tolist()}")
+
+        print(f"[INFO] weighted sampler class_counts: {sample_weights}")
 
         return DataLoader(
             dataset,
