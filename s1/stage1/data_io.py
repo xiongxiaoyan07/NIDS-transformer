@@ -86,13 +86,18 @@ def read_stage1_csvs(
 
     # Keep only flow IDs that exist in both files.
     # packet_ids = set(packets[flow_id_col].unique().tolist())
-    flow_ids = set(flows[flow_id_col].unique().tolist())
-    packets = packets[packets[flow_id_col].isin(flow_ids)].copy()
-    flows = flows[flows[flow_id_col].isin(flow_ids)].copy()
+    packet_ids = set(packets[flow_id_col].unique())
+    flow_ids = set(flows[flow_id_col].unique())
+    valid_ids = packet_ids & flow_ids
+
+    packets = packets[packets[flow_id_col].isin(valid_ids)].copy()
+    flows = flows[flows[flow_id_col].isin(valid_ids)].copy()
 
     # ---------- 按 flow 截取 packet ----------
     if strategy not in {"head", "head_tail", "random"}:
         raise ValueError("sequence.strategy must be one of: head, head_tail, random")
+
+    print(f"[data_io.py] --- read_stage1_csvs--- seed = {seed}, strategy = {strategy}, max_seq_len = {max_seq_len}")
 
     packets_list = []
 
@@ -116,7 +121,6 @@ def read_stage1_csvs(
             continue
 
         # random
-        print("[data_io.py] --- read_stage1_csvs--- seed = ", seed)
         rng = np.random.default_rng(seed + int(fid) % 1000003)
         chosen = rng.choice(n, size=max_seq_len, replace=False)
         chosen = np.sort(chosen)

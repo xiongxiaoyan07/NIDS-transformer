@@ -165,25 +165,25 @@ def main():
     print("\n[DEBUG] --TRAIN--- Checking train_loader consistency...")
     for i, batch in enumerate(loaders["train"]):
         print("[DEBUG --TRAIN--- batch 0 flow_ids]:", batch["flow_id"][:5])
-        if i == 2:
+        if i == 1:
             break
 
     print("\n[DEBUG] --TRAIN-trainNoSampler-- Checking train_loader  consistency...")
     for i, batch in enumerate(loaders["trainNoSampler"]):
         print("[DEBUG --TRAIN-trainNoSampler-- batch 0 flow_ids]:", batch["flow_id"][:5])
-        if i == 2:
+        if i == 1:
             break
 
     print("\n[DEBUG] --VAL--- Checking VAL_loader consistency...")
     for i, batch in enumerate(loaders["val"]):
         print("[DEBUG --VAL--- batch 0 flow_ids]:", batch["flow_id"][:5])
-        if i == 2:
+        if i == 1:
             break
 
     print("\n[DEBUG] --TEST--- Checking TEST_loader consistency...")
     for i, batch in enumerate(loaders["test"]):
         print("[DEBUG --TEST--- batch 0 flow_ids]:", batch["flow_id"][:5])
-        if i == 2:
+        if i == 1:
             break
 
     # Print summary

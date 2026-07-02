@@ -181,6 +181,9 @@ def train_model(
 
         score = float(val_metrics.get(monitor, val_metrics.get("macro_f1", 0.0)))
 
+        if hasattr(model, "flow_fusion") and hasattr(model.flow_fusion, "last_stats"):
+            print(f"[Epoch {epoch}] "
+                  f"[Fusion stats] -> {model.flow_fusion.last_stats}")
         if (epoch + 1) % 5 == 0:
             print(
                 f"[Epoch {epoch + 1}/{epochs}] "

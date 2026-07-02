@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
+from mpmath import residual
 
 from .build_mlp import build_mlp
 
@@ -473,13 +474,20 @@ class ResidualGatedFlowFusion(nn.Module):
     """
     Packet-biased residual fusion.
 
-    初始时 z_final ≈ z_packet，避免 flow branch 破坏已经很强的 B。
-    flow 信息只有在确实有帮助时，才以 residual delta 的方式加入。
+    初始时 z_final ≈ z_packet。
+    flow branch 只作为小 residual correction。
     """
 
-    def __init__(self, d_model: int, dropout: float, scale_init: float = -4.0):
+    def __init__(
+        self,
+        d_model: int,
+        dropout: float,
+        scale_init: float = -4.0,
+        gate_bias: float = -2.0,
+    ):
         super().__init__()
 
+        self.last_stats = None
         self.flow_delta = nn.Sequential(
             nn.Linear(d_model * 2, d_model),
             nn.LayerNorm(d_model),
@@ -489,29 +497,44 @@ class ResidualGatedFlowFusion(nn.Module):
         )
 
         self.gate_linear = nn.Linear(d_model * 2, d_model)
-        nn.init.constant_(self.gate_linear.bias, 2.0)  # 初始 gate ≈ 0.88，偏向 packet branch
+        nn.init.constant_(self.gate_linear.bias, gate_bias)
 
         self.gate = nn.Sequential(
             self.gate_linear,
             nn.Sigmoid(),
         )
 
-        # sigmoid(-4) ≈ 0.018，初始 residual 很小
         self.scale_logit = nn.Parameter(torch.tensor(float(scale_init)))
 
-        self.out_norm = nn.LayerNorm(d_model)
+        # 让 residual 初始更接近 0，避免一开始破坏 packet branch
+        last_linear = self.flow_delta[-1]
+        nn.init.zeros_(last_linear.weight)
+        nn.init.zeros_(last_linear.bias)
 
     def forward(self, pooled: torch.Tensor, flow_encoded: torch.Tensor) -> torch.Tensor:
         concat_feat = torch.cat([pooled, flow_encoded], dim=-1)
 
         delta = self.flow_delta(concat_feat)
         gate = self.gate(concat_feat)
-
         scale = torch.sigmoid(self.scale_logit)
 
         fused = pooled + scale * gate * delta
 
-        return self.out_norm(fused)
+        with torch.no_grad():
+            self.last_stats = {
+                "scale": float(scale.detach().cpu()),
+                "gate_mean": float(gate.mean().detach().cpu()),
+                "gate_std": float(gate.std().detach().cpu()),
+                "delta_norm": float(delta.norm(dim=-1).mean().detach().cpu()),
+                "pooled_norm": float(pooled.norm(dim=-1).mean().detach().cpu()),
+                "residual_norm": float(residual.norm(dim=-1).mean().detach().cpu()),
+                "residual_ratio": float(
+                    residual.norm(dim=-1).mean().detach().cpu()
+                    / (pooled.norm(dim=-1).mean().detach().cpu() + 1e-8)
+                ),
+            }
+
+        return fused
 # ============================================================
 # Shared classifier builder
 # ============================================================
@@ -610,10 +633,9 @@ class Stage1TimeAwareTransformer(nn.Module):
 
         record_projection_cfg = model_cfg.get("record_projection", None)
 
-        print(f"[INFO]------model --- __init__---d_model={d_model}, nhead={nhead}, num_layers={num_layers}, "
+        print(f"[INFO]------model --- __init__--fusion_method={self.fusion_method}===-d_model={d_model}, nhead={nhead}, num_layers={num_layers}, "
               f"dim_feedforward={dim_feedforward}, dropout={dropout}, max_seq_len={max_seq_len}, use_positional_encoding={use_positional_encoding}, "
-              f"use_time_encoding={use_time_encoding}, use_flow_fusion={self.use_flow_fusion}, fusion_method={self.fusion_method}"
-              f"fusion_method={self.fusion_method}")
+              f"use_time_encoding={use_time_encoding}, use_flow_fusion={self.use_flow_fusion}, inject_to_packets={self.inject_to_packets}")
         # Time encoding alpha (smoothing factor)
         time_encoding_cfg = model_cfg.get("time_encoding", {})
         alpha = float(time_encoding_cfg.get("alpha", 1e-07))
