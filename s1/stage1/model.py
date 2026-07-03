@@ -366,31 +366,57 @@ class AttentionPooling(nn.Module):
 
         return self.fusion(combined)
 
+# class FlowFeatureEncoder(nn.Module):
+#     """
+#     Encodes flow-level statistical features into d_model space.
+#     Used only when inject_to_packets=False.
+#     """
+
+#     def __init__(self, flow_dim: int, d_model: int, dropout: float):
+#         super().__init__()
+#         self.encoder = nn.Sequential(
+#             nn.Linear(flow_dim, d_model),
+#             nn.LayerNorm(d_model),
+#             nn.GELU(),
+#             nn.Dropout(dropout),
+#             nn.Linear(d_model, d_model),
+#         )
+
+#     def forward(self, flow_feats: torch.Tensor) -> torch.Tensor:
+#         """
+#         Args:
+#             flow_feats: [B, flow_dim]
+#         Returns:
+#             flow_encoded: [B, d_model]
+#         """
+#         return self.encoder(flow_feats)
+
 class FlowFeatureEncoder(nn.Module):
     """
-    Encodes flow-level statistical features into d_model space.
-    Used only when inject_to_packets=False.
+    Smaller bottleneck encoder for weak/noisy flow features.
     """
 
-    def __init__(self, flow_dim: int, d_model: int, dropout: float):
+    def __init__(
+        self,
+        flow_dim: int,
+        d_model: int,
+        dropout: float,
+        bottleneck_dim: int = 32,
+    ):
         super().__init__()
+
         self.encoder = nn.Sequential(
-            nn.Linear(flow_dim, d_model),
-            nn.LayerNorm(d_model),
+            nn.Linear(flow_dim, bottleneck_dim),
+            nn.LayerNorm(bottleneck_dim),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d_model, d_model),
+            nn.Linear(bottleneck_dim, d_model),
+            nn.LayerNorm(d_model),
         )
 
     def forward(self, flow_feats: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            flow_feats: [B, flow_dim]
-        Returns:
-            flow_encoded: [B, d_model]
-        """
         return self.encoder(flow_feats)
-
+    
 class FlowFusion(nn.Module):
     """
     Fuses packet-level representation (from Transformer) with flow-level features.
@@ -535,6 +561,133 @@ class ResidualGatedFlowFusion(nn.Module):
             }
 
         return fused
+
+class LogitResidualFusion(nn.Module):
+    """
+    Safest flow-feature fusion.
+
+    final_logits = packet_logits + scale * gate * flow_logits
+
+    初始时：
+        flow_head 最后一层为 0
+        scale 很小
+        gate 偏小
+
+    所以初始 C ≈ B，不会破坏 packet-only branch。
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        dropout: float,
+        num_classes: int = 2,
+        scale_init: float = -4.0,
+        gate_bias: float = -2.0,
+    ):
+        super().__init__()
+
+        self.flow_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model // 2, num_classes),
+        )
+
+        # 初始 flow_logits = 0，保证不会影响 B
+        last = self.flow_head[-1]
+        nn.init.zeros_(last.weight)
+        nn.init.zeros_(last.bias)
+
+        # gate 根据 packet representation、flow representation、packet uncertainty 决定
+        self.gate = nn.Linear(d_model * 2 + 1, 1)
+        nn.init.constant_(self.gate.bias, gate_bias)
+
+        self.scale_logit = nn.Parameter(torch.tensor(float(scale_init)))
+
+    def forward(
+        self,
+        z_packet: torch.Tensor,
+        flow_encoded: torch.Tensor,
+        logits_packet: torch.Tensor,
+    ) -> torch.Tensor:
+        prob1 = torch.softmax(logits_packet, dim=-1)[:, 1:2]
+
+        # uncertainty 越大，说明 B 越不确定，flow 越有机会参与
+        # prob1 接近 0.5 时 uncertainty 接近 1
+        # prob1 接近 0 或 1 时 uncertainty 接近 0
+        uncertainty = 1.0 - 2.0 * torch.abs(prob1 - 0.5)
+
+        gate_input = torch.cat(
+            [z_packet, flow_encoded, uncertainty],
+            dim=-1,
+        )
+
+        gate = torch.sigmoid(self.gate(gate_input))
+        scale = torch.sigmoid(self.scale_logit)
+
+        flow_logits = self.flow_head(flow_encoded)
+
+        logits = logits_packet + scale * gate * flow_logits
+
+        return logits
+    
+class FlowFiLMModulator(nn.Module):
+    """
+    Flow-conditioned token modulation.
+
+    初始为 identity:
+        x_out = x
+    训练后：
+        x_out = x + scale * (gamma * x + beta)
+    """
+
+    def __init__(self, d_model: int, dropout: float, scale_init: float = -4.0):
+        super().__init__()
+
+        self.last_stats = None
+
+        self.to_gamma_beta = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, 2 * d_model),
+        )
+
+        last = self.to_gamma_beta[-1]
+        nn.init.zeros_(last.weight)
+        nn.init.zeros_(last.bias)
+
+        self.scale_logit = nn.Parameter(torch.tensor(float(scale_init)))
+
+    def forward(self, x: torch.Tensor, flow_encoded: torch.Tensor) -> torch.Tensor:
+        gamma_beta = self.to_gamma_beta(flow_encoded)
+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+
+        gamma = gamma.unsqueeze(1)
+        beta = beta.unsqueeze(1)
+
+        scale = torch.sigmoid(self.scale_logit)
+
+        residual = scale * (gamma * x + beta)
+        out = x + residual
+
+        with torch.no_grad():
+            self.last_stats = {
+                "scale": float(scale.detach().cpu()),
+                "gamma_abs_mean": float(gamma.abs().mean().detach().cpu()),
+                "beta_abs_mean": float(beta.abs().mean().detach().cpu()),
+                "x_norm": float(x.norm(dim=-1).mean().detach().cpu()),
+                "residual_norm": float(residual.norm(dim=-1).mean().detach().cpu()),
+                "residual_ratio": float(
+                    residual.norm(dim=-1).mean().detach().cpu()
+                    / (x.norm(dim=-1).mean().detach().cpu() + 1e-8)
+                ),
+            }
+
+        return out
 # ============================================================
 # Shared classifier builder
 # ============================================================
@@ -632,6 +785,7 @@ class Stage1TimeAwareTransformer(nn.Module):
         use_time_encoding = bool(model_cfg.get("use_time_encoding", True))
 
         record_projection_cfg = model_cfg.get("record_projection", None)
+        flow_bottleneck_dim = int(flow_fusion_cfg.get("bottleneck_dim", d_model))
 
         print(f"[INFO]------model --- __init__--fusion_method={self.fusion_method}===-d_model={d_model}, nhead={nhead}, num_layers={num_layers}, "
               f"dim_feedforward={dim_feedforward}, dropout={dropout}, max_seq_len={max_seq_len}, use_positional_encoding={use_positional_encoding}, "
@@ -679,7 +833,8 @@ class Stage1TimeAwareTransformer(nn.Module):
                 self.flow_encoder = FlowFeatureEncoder(
                     flow_dim=flow_feature_dim,
                     d_model=d_model,
-                    dropout=dropout
+                    dropout=dropout,
+                    bottleneck_dim=flow_bottleneck_dim,
                 )
 
                 if self.fusion_method == "residual_gated":
@@ -688,13 +843,22 @@ class Stage1TimeAwareTransformer(nn.Module):
                         dropout=dropout,
                         scale_init=float(flow_fusion_cfg.get("residual_scale_init", -4.0)),
                     )
-                else:
+                elif self.fusion_method == "token_film":
+                    self.flow_film = FlowFiLMModulator(
+                        d_model=d_model,
+                        dropout=dropout,
+                        scale_init=float(flow_fusion_cfg.get("residual_scale_init", -4.0)),
+                    )
+                elif self.fusion_method == "flow_token":
+                    self.flow_token_scale = nn.Parameter(
+                        torch.tensor(float(flow_fusion_cfg.get("residual_scale_init", -4.0)))
+                    )
+                elif self.fusion_method == "gated":
                     self.flow_fusion = FlowFusion(
                         d_model=d_model,
                         fusion_method=self.fusion_method,
                         dropout=dropout
                     )
-
                 print(f"[INFO---model.__init__] 方案C - 分层特征注入已启用")
                 print(f"[INFO]   Flow特征维度: {flow_feature_dim}")
                 print(f"[INFO]   融合方法: {self.fusion_method}")
@@ -753,15 +917,61 @@ class Stage1TimeAwareTransformer(nn.Module):
         # 2. Time-aware encoding
         e = self.time_encoding(e, time_log, mask)  # [B, L, d_model]
 
-        # 3. Transformer encoding
-        src_key_padding_mask = ~mask.bool()
-        h = self.encoder(e, src_key_padding_mask=src_key_padding_mask)  # [B, L, d_model]
+        if (
+            self.fusion_method == "token_film"
+            and self.use_flow_fusion
+            and not self.inject_to_packets
+            and flow_feats is not None 
+        ):
+            flow_encoded = self.flow_encoder(flow_feats)
+            e = self.flow_film(e, flow_encoded)
 
-        # 4. Pooling to get flow-level representation
-        z = self.attention_pool(h, mask)  # [B, d_model]
+        if (self.fusion_method == "flow_token"
+            and self.use_flow_fusion
+            and not self.inject_to_packets
+            and flow_feats is not None):
+            flow_encoded = self.flow_encoder(flow_feats).unsqueeze(1)  # [B, 1, D]
 
-        # 5. Flow feature fusion (方案C: 分层注入)
-        if self.use_flow_fusion and not self.inject_to_packets and flow_feats is not None:
+            e = torch.cat([flow_encoded, e], dim=1)
+
+            flow_mask = torch.ones(
+                mask.size(0),
+                1,
+                device=mask.device,
+                dtype=mask.dtype,
+            )
+
+            mask_aug = torch.cat([flow_mask, mask], dim=1)
+
+            h_aug = self.encoder(
+                e,
+                src_key_padding_mask=~mask_aug.bool(),
+            )
+
+            flow_token_h = h_aug[:, 0]
+            packet_h = h_aug[:, 1:]
+
+            z_packet = self.attention_pool(packet_h, mask)
+
+            # 安全 residual
+            scale = torch.sigmoid(self.flow_token_scale)
+            z = z_packet + scale * flow_token_h
+
+        else:
+            h = self.encoder(e, src_key_padding_mask=~mask.bool())
+            z = self.attention_pool(h, mask)
+        # # 3. Transformer encoding
+        # src_key_padding_mask = ~mask.bool()
+        # h = self.encoder(e, src_key_padding_mask=src_key_padding_mask)  # [B, L, d_model]
+
+        # # 4. Pooling to get flow-level representation
+        # z = self.attention_pool(h, mask)  # [B, d_model]
+
+        # 5. Flow feature fusion (方案C: 分层注入) gated fusion
+        if (self.fusion_method == "gated" 
+            and self.use_flow_fusion
+            and not self.inject_to_packets
+            and flow_feats is not None):
             # Encode flow features
             flow_encoded = self.flow_encoder(flow_feats)  # [B, d_model]
 

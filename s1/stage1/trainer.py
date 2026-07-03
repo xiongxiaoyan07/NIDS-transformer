@@ -184,6 +184,8 @@ def train_model(
         if hasattr(model, "flow_fusion") and hasattr(model.flow_fusion, "last_stats"):
             print(f"[Epoch {epoch}] "
                   f"[Fusion stats] -> {model.flow_fusion.last_stats}")
+        if hasattr(model, "flow_film") and hasattr(model.flow_film, "last_stats"):
+            print(f"[Epoch {epoch}] [TokenFiLM stats] -> {model.flow_film.last_stats}")
         if (epoch + 1) % 5 == 0:
             print(
                 f"[Epoch {epoch + 1}/{epochs}] "
@@ -209,7 +211,7 @@ def train_model(
                 },
                 best_path,
             )
-            print(f"[INFO] saved best model: {best_path}")
+            print(f"[INFO] saved best model: {best_path}, best score({monitor}): {best_score}")
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= patience:
