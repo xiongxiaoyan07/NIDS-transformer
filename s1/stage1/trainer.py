@@ -186,6 +186,8 @@ def train_model(
                   f"[Fusion stats] -> {model.flow_fusion.last_stats}")
         if hasattr(model, "flow_film") and hasattr(model.flow_film, "last_stats"):
             print(f"[Epoch {epoch}] [TokenFiLM stats] -> {model.flow_film.last_stats}")
+        if hasattr(model, "last_flow_token_stats") and model.last_flow_token_stats is not None:
+            print(f"[Epoch {epoch}] [FlowToken stats] -> {model.last_flow_token_stats}")
         if (epoch + 1) % 5 == 0:
             print(
                 f"[Epoch {epoch + 1}/{epochs}] "

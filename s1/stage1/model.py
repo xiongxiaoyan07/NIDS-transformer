@@ -14,7 +14,6 @@ from typing import Dict, Any, Optional
 
 import torch
 import torch.nn as nn
-from mpmath import residual
 
 from .build_mlp import build_mlp
 
@@ -544,7 +543,8 @@ class ResidualGatedFlowFusion(nn.Module):
         gate = self.gate(concat_feat)
         scale = torch.sigmoid(self.scale_logit)
 
-        fused = pooled + scale * gate * delta
+        residual = scale * gate * delta
+        fused = pooled + residual
 
         with torch.no_grad():
             self.last_stats = {
@@ -635,18 +635,27 @@ class LogitResidualFusion(nn.Module):
     
 class FlowFiLMModulator(nn.Module):
     """
-    Flow-conditioned token modulation.
+    Flow-conditioned token modulation with residual cap.
 
-    初始为 identity:
-        x_out = x
-    训练后：
-        x_out = x + scale * (gamma * x + beta)
+    x_out = x + clipped_residual
+
+    目标：
+    1. 保留 flow feature 的调制能力；
+    2. 防止 residual_ratio 后期涨到 0.3~0.4；
+    3. 让 C 更接近 B，提升泛化稳定性。
     """
 
-    def __init__(self, d_model: int, dropout: float, scale_init: float = -4.0):
+    def __init__(
+        self,
+        d_model: int,
+        dropout: float,
+        scale_init: float = -5.0,
+        max_residual_ratio: float = 0.12,
+    ):
         super().__init__()
 
         self.last_stats = None
+        self.max_residual_ratio = float(max_residual_ratio)
 
         self.to_gamma_beta = nn.Sequential(
             nn.LayerNorm(d_model),
@@ -671,7 +680,16 @@ class FlowFiLMModulator(nn.Module):
 
         scale = torch.sigmoid(self.scale_logit)
 
-        residual = scale * (gamma * x + beta)
+        raw_residual = scale * (gamma * x + beta)
+
+        # residual cap
+        x_norm = x.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        residual_norm = raw_residual.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+        max_allowed = self.max_residual_ratio * x_norm
+        shrink = torch.clamp(max_allowed / residual_norm, max=1.0)
+
+        residual = raw_residual * shrink
         out = x + residual
 
         with torch.no_grad():
@@ -680,7 +698,12 @@ class FlowFiLMModulator(nn.Module):
                 "gamma_abs_mean": float(gamma.abs().mean().detach().cpu()),
                 "beta_abs_mean": float(beta.abs().mean().detach().cpu()),
                 "x_norm": float(x.norm(dim=-1).mean().detach().cpu()),
+                "raw_residual_norm": float(raw_residual.norm(dim=-1).mean().detach().cpu()),
                 "residual_norm": float(residual.norm(dim=-1).mean().detach().cpu()),
+                "raw_residual_ratio": float(
+                    raw_residual.norm(dim=-1).mean().detach().cpu()
+                    / (x.norm(dim=-1).mean().detach().cpu() + 1e-8)
+                ),
                 "residual_ratio": float(
                     residual.norm(dim=-1).mean().detach().cpu()
                     / (x.norm(dim=-1).mean().detach().cpu() + 1e-8)
@@ -847,12 +870,23 @@ class Stage1TimeAwareTransformer(nn.Module):
                     self.flow_film = FlowFiLMModulator(
                         d_model=d_model,
                         dropout=dropout,
-                        scale_init=float(flow_fusion_cfg.get("residual_scale_init", -4.0)),
+                        scale_init=float(flow_fusion_cfg.get("residual_scale_init", -5.0)),
+                        max_residual_ratio=float(flow_fusion_cfg.get("max_residual_ratio", 0.12)),
                     )
                 elif self.fusion_method == "flow_token":
-                    self.flow_token_scale = nn.Parameter(
+                    self.flow_token_input_scale_logit = nn.Parameter(
+                        torch.tensor(float(flow_fusion_cfg.get("token_input_scale_init", -5.0)))
+                    )
+
+                    self.flow_token_output_scale_logit = nn.Parameter(
                         torch.tensor(float(flow_fusion_cfg.get("residual_scale_init", -4.0)))
                     )
+
+                    self.flow_type_embedding = nn.Parameter(
+                        torch.zeros(1, 1, d_model)
+                    )
+
+                    self.last_flow_token_stats = None
                 elif self.fusion_method == "gated":
                     self.flow_fusion = FlowFusion(
                         d_model=d_model,
@@ -932,7 +966,10 @@ class Stage1TimeAwareTransformer(nn.Module):
             and flow_feats is not None):
             flow_encoded = self.flow_encoder(flow_feats).unsqueeze(1)  # [B, 1, D]
 
-            e = torch.cat([flow_encoded, e], dim=1)
+            input_scale = torch.sigmoid(self.flow_token_input_scale_logit)
+            flow_token = input_scale * flow_encoded + self.flow_type_embedding
+
+            e_aug = torch.cat([flow_token, e], dim=1)
 
             flow_mask = torch.ones(
                 mask.size(0),
@@ -944,7 +981,7 @@ class Stage1TimeAwareTransformer(nn.Module):
             mask_aug = torch.cat([flow_mask, mask], dim=1)
 
             h_aug = self.encoder(
-                e,
+                e_aug,
                 src_key_padding_mask=~mask_aug.bool(),
             )
 
@@ -953,9 +990,21 @@ class Stage1TimeAwareTransformer(nn.Module):
 
             z_packet = self.attention_pool(packet_h, mask)
 
-            # 安全 residual
-            scale = torch.sigmoid(self.flow_token_scale)
-            z = z_packet + scale * flow_token_h
+            output_scale = torch.sigmoid(self.flow_token_output_scale_logit)
+            z = z_packet + output_scale * flow_token_h
+
+            with torch.no_grad():
+                self.last_flow_token_stats = {
+                    "input_scale": float(input_scale.detach().cpu()),
+                    "output_scale": float(output_scale.detach().cpu()),
+                    "flow_encoded_norm": float(flow_encoded.norm(dim=-1).mean().detach().cpu()),
+                    "flow_token_h_norm": float(flow_token_h.norm(dim=-1).mean().detach().cpu()),
+                    "z_packet_norm": float(z_packet.norm(dim=-1).mean().detach().cpu()),
+                    "residual_ratio": float(
+                        (output_scale * flow_token_h).norm(dim=-1).mean().detach().cpu()
+                        / (z_packet.norm(dim=-1).mean().detach().cpu() + 1e-8)
+                    ),
+                }
 
         else:
             h = self.encoder(e, src_key_padding_mask=~mask.bool())
