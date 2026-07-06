@@ -35,6 +35,7 @@ def clean_dataframe(df: pd.DataFrame, type_str: str) -> pd.DataFrame:
     if type_str == "flow":
         df = df[(df['flow_id'] != 0) & (df['flow_start_timestamp_us'] != 0) &
                 df['flow_id'].notna() & df['flow_start_timestamp_us'].notna()]
+        
     else:
         df = df[(df['flow_id'] != 0) & (df['timestamp_us'] != 0) &
                 df['flow_id'].notna() & df['timestamp_us'].notna()]
@@ -84,6 +85,19 @@ def read_stage1_csvs(
         packets[packet_time_col], errors="coerce"
     ).fillna(0).astype("int64")
 
+    # Ensure one row per flow_id before any merge, otherwise labels/metadata can expand.
+    if flows[flow_id_col].duplicated().any():
+        dup_count = int(flows[flow_id_col].duplicated().sum())
+        sort_cols = [flow_id_col]
+        if "flow_start_timestamp_us" in flows.columns:
+            sort_cols.append("flow_start_timestamp_us")
+
+        print(f"[WARNING] Duplicate flow_id rows in flows: {dup_count}. Keeping first row per flow_id.")
+        flows = (
+            flows.sort_values(sort_cols)
+            .drop_duplicates(subset=[flow_id_col], keep="first")
+            .copy()
+        )
     # Keep only flow IDs that exist in both files.
     # packet_ids = set(packets[flow_id_col].unique().tolist())
     packet_ids = set(packets[flow_id_col].unique())
@@ -180,11 +194,21 @@ def generate_and_save_stage1_tensors(
     # 1. 固定 flow_ids 顺序
     flow_ids = [int(x) for x in flow_ids]
     num_flows = len(flow_ids)
+    if len(flow_ids) != len(set(flow_ids)):
+        raise ValueError("Duplicate flow_ids found in split list before tensor generation.")
+
+    if flows[flow_id_col].duplicated().any():
+        dup = flows.loc[flows[flow_id_col].duplicated(), flow_id_col].head(10).tolist()
+        raise ValueError(f"Duplicate flow_id in flows before merge. Examples: {dup}")
 
     # 2. 只保留需要的 flow，并按 flow_ids 排序
     flow_order = pd.DataFrame({flow_id_col: flow_ids})
     flows_sub = flow_order.merge(flows, on=flow_id_col, how="left")
-
+    if len(flows_sub) != num_flows:
+        raise ValueError(
+            f"flows_sub length mismatch after merge: len(flows_sub)={len(flows_sub)}, "
+            f"num_flows={num_flows}. This usually means duplicate flow_id rows exist in flows."
+        )
     if flows_sub[label_col].isna().any():
         missing = flows_sub.loc[flows_sub[label_col].isna(), flow_id_col].tolist()[:10]
         raise ValueError(f"Some flow_ids are missing in flows. Examples: {missing}")
