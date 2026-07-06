@@ -58,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
+        default=None,
         help="Override seed",
     )
     parser.add_argument(
@@ -78,14 +78,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_pooling",
         type=str,
-        default="last",
+        default=None,
         choices=["last", "mean", "attention"],
         help="Override model.pooling",
     )
     parser.add_argument(
         "--cls_head",
         type=int,
-        default=1,
+        default=None,
         help="Override model.cls_head",
     )
     parser.add_argument(
@@ -209,6 +209,12 @@ def main() -> None:
     context_indices = context_builder.build()
     print("[INFO] Stage2 --------- context_indices = ", context_indices[:3])
 
+    print_context_diagnostics(
+        meta_df=meta_df,
+        context_indices=context_indices,
+        include_target=cfg["context"].get("include_target", True),
+    )
+
     print_data_summary(meta_df, z_sorted, context_indices)
 
     print("[INFO] Stage2 --------- build_datasets")
@@ -238,6 +244,43 @@ def main() -> None:
 
     print(f"[INFO] Stage2 finished. Outputs saved to: {args.out_dir}")
 
+def print_context_diagnostics(meta_df, context_indices, include_target=True):
+    rows = []
+
+    for i, ctx in enumerate(context_indices):
+        length = len(ctx)
+        history_len = length - int(include_target)
+
+        rows.append({
+            "split": meta_df.at[i, "split"],
+            "label": int(meta_df.at[i, "label"]),
+            "context_len": length,
+            "history_len": history_len,
+        })
+
+    df = pd.DataFrame(rows)
+
+    print("\n[Context Diagnostics] by split:")
+    print(
+        df.groupby("split")["history_len"]
+        .describe(percentiles=[0.5, 0.9, 0.95])
+        .to_string()
+    )
+
+    print("\n[Context Diagnostics] by split and label:")
+    print(
+        df.groupby(["split", "label"])["history_len"]
+        .describe(percentiles=[0.5, 0.9, 0.95])
+        .to_string()
+    )
+
+    print("\n[Context no-history rate] by split and label:")
+    print(
+        df.assign(no_history=df["history_len"] == 0)
+        .groupby(["split", "label"])["no_history"]
+        .mean()
+        .to_string()
+    )
 if __name__ == "__main__":
     main()
 

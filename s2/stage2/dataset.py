@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,11 @@ class Stage2Dataset(Dataset):
     def __getitem__(self, i: int) -> Dict[str, Any]:
         row_idx = int(self.target_rows[i])
         ctx_idx = self.context_indices[row_idx]
+        if len(ctx_idx) > 0:
+            assert int(ctx_idx[-1]) == row_idx, (
+                f"Current flow is not the last context token: "
+                f"row_idx={row_idx}, ctx_last={ctx_idx[-1]}"
+            )
         # 根据上下文索引取 embedding。
         if len(ctx_idx) == 0:
             context_z = np.zeros((0, self.z.shape[1]), dtype=np.float32)
@@ -56,31 +61,37 @@ class Stage2Dataset(Dataset):
             "row_idx": row_idx,
         }
 
-def stage2_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+def stage2_collate_fn(
+    batch: List[Dict[str, Any]],
+    fixed_max_len: Optional[int] = None,
+) -> Dict[str, torch.Tensor]:
     batch_size = len(batch)
     # embedding 维度。
     d_model = batch[0]["context_z"].shape[1]
-    # 找当前 batch 中最长的上下文长度。
-    max_len = max(1, max(int(item["context_z"].shape[0]) for item in batch))
+
+    if fixed_max_len is None:
+        # 找当前 batch 中最长的上下文长度。
+        max_len = max(1, max(int(item["context_z"].shape[0]) for item in batch))
+    else:
+        max_len = int(fixed_max_len)
 
     x = torch.zeros(batch_size, max_len, d_model, dtype=torch.float32)
     mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
+
     labels = torch.stack([item["label"] for item in batch])
     flow_ids = torch.tensor([item["flow_id"] for item in batch], dtype=torch.long)
     row_idx = torch.tensor([item["row_idx"] for item in batch], dtype=torch.long)
 
     for i, item in enumerate(batch):
-        length = int(item["context_z"].shape[0])
+        context_z = item["context_z"]
+        length = int(context_z.shape[0])
+
+        if length > max_len:
+            context_z = context_z[-max_len:]
+            length = max_len
+
         if length > 0:
-            # 这是右填充
-            # x[i, :length] = item["context_z"]
-            # mask[i, :length] = True
-            # 这是左填充
-            # 左填充（leftpadding）意味着：
-            # 真实token对齐在右边
-            # padding填充在左边
-            # mask对应位置要标记真实token
-            x[i, max_len - length:] = item["context_z"]
+            x[i, max_len - length:] = context_z
             mask[i, max_len - length:] = True
 
     return {

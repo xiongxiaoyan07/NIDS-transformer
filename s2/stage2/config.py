@@ -60,11 +60,17 @@ DEFAULT_CFG: Dict[str, Any] = {
         "weight_decay": 1.0e-4,
         "num_workers": 0,
         "patience": 20,
-        "metric_for_best": "val_f1",  # val_f1 / val_auroc / val_auprc / val_loss
+        "metric_for_best": "f1_label1",
         "use_weighted_sampler": True,
         "class_weighted_loss": True,
         "grad_clip_norm": 1.0,
         "threshold": 0.5,
+        "auto_threshold": True,
+        "threshold_metric": "f1_label1",
+        "threshold_min": 0.01,
+        "threshold_max": 0.99,
+        "threshold_steps": 199,
+        "amp": True,
         "device": "auto",
     },
 }

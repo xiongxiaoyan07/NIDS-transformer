@@ -83,8 +83,15 @@ def compact_left_padded_sequences(
 # Positional Encoding
 # ============================================================
 class SinusoidalPositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 512):
+    def __init__(self, d_model: int, max_len: int = 512, position_mode: str = "age"):
         super().__init__()
+        if position_mode not in {"age", "order", "absolute"}:
+            raise ValueError(
+                f"Unknown model.position_mode: {position_mode}. "
+                "Choose from: age, order, absolute."
+            )
+        self.position_mode = position_mode
+
         position = torch.arange(max_len).float().unsqueeze(1)
         div_term = torch.exp(
             torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model)
@@ -100,14 +107,47 @@ class SinusoidalPositionalEncoding(nn.Module):
 
         self.register_buffer("pe", pe.unsqueeze(0), persistent=False)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        x:    [B, L, D]
+        mask: [B, L], True means valid token.
+
+        position_mode:
+            absolute: physical tensor positions 0..L-1.
+            order:    valid tokens get positions 0..len-1 from oldest to target.
+            age:      target/current flow gets 0; older history gets larger ids.
+        """
         length = x.size(1)
-        if length > self.pe.size(1):
+
+        if mask is None or self.position_mode == "absolute":
+            if length > self.pe.size(1):
+                raise ValueError(
+                    f"Sequence length {length} > max positional length {self.pe.size(1)}. "
+                    "Increase model.max_len."
+                )
+            return x + self.pe[:, :length, :]
+
+        if mask.shape != x.shape[:2]:
+            raise ValueError(f"mask shape {tuple(mask.shape)} does not match x shape {tuple(x.shape[:2])}")
+
+        valid_order = mask.long().cumsum(dim=1) - 1
+        lengths = mask.long().sum(dim=1, keepdim=True).clamp(min=1)
+
+        if self.position_mode == "age":
+            position_ids = lengths - 1 - valid_order
+        else:
+            position_ids = valid_order
+
+        position_ids = position_ids.masked_fill(~mask, 0).clamp(min=0)
+        max_position_id = int(position_ids.max().item()) if position_ids.numel() > 0 else 0
+        if max_position_id >= self.pe.size(1):
             raise ValueError(
-                f"Sequence length {length} > max positional length {self.pe.size(1)}. "
+                f"Position id {max_position_id} >= max positional length {self.pe.size(1)}. "
                 "Increase model.max_len."
             )
-        return x + self.pe[:, :length, :]
+
+        pe = self.pe[0][position_ids]
+        return x + pe * mask.unsqueeze(-1).to(dtype=x.dtype)
 
 
 # ============================================================
@@ -509,18 +549,16 @@ class Stage2Transformer(nn.Module):
             else nn.Linear(self.input_dim, self.d_model)
         )
 
-        print(
-            "[INFO] Stage2Transformer.__init__ use_positional_encoding=",
-            model_cfg.get("use_positional_encoding", True),
-        )
-
+        self.use_positional_encoding = bool(model_cfg.get("use_positional_encoding", True))
+        self.position_mode = str(model_cfg.get("position_mode", "age"))
         self.pos = (
             SinusoidalPositionalEncoding(
                 self.d_model,
                 max_len=int(model_cfg.get("max_len", 512)),
+                position_mode=self.position_mode,
             )
-            if bool(model_cfg.get("use_positional_encoding", True))
-            else nn.Identity()
+            if self.use_positional_encoding
+            else None
         )
 
         encoder_layer = nn.TransformerEncoderLayer(
@@ -544,8 +582,15 @@ class Stage2Transformer(nn.Module):
         num_classes = int(model_cfg.get("num_classes", 2))
         cls_head_config = int(model_cfg.get("cls_head", 0))
 
-        print("[INFO] Stage2Transformer.__init__*********** pooling=",self.pooling)
-        print("[INFO] Stage2Transformer.__init__*********** dropout=",dropout)
+        print(
+            f"[INFO] Stage2Transformer.__init__*********** "
+            f"use_positional_encoding={self.use_positional_encoding}, "
+            f"position_mode={self.position_mode}, "
+            f"dim_feedforward={model_cfg.get('dim_feedforward', 512)}, "
+            f"nhead={model_cfg.get('nhead', 8)}, dropout={dropout}, "
+            f"num_layers={model_cfg.get('num_layers', 2)}, pooling={self.pooling}, "
+            f"num_classes={num_classes}, cls_head_config={cls_head_config}"
+        )
 
         self.cls_head = build_cls_head(
             d_model=self.d_model,
@@ -559,7 +604,8 @@ class Stage2Transformer(nn.Module):
         # mask: True means valid token.
         # Transformer src_key_padding_mask: True means padding token.
         x = self.input_proj(context_z)
-        x = self.pos(x)
+        if self.use_positional_encoding:
+            x = self.pos(x, mask)
 
         key_padding_mask = ~mask
         #src_key_padding_mask True 代表需要被忽略的位置（即填充位置），False 代表需要保留的正常Token
@@ -602,10 +648,4 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
         f"Unknown model.model_type: {model_type}. "
         "Choose from: no_context_mlp, lstm, transformer."
     )
-
-
-
-
-
-
 

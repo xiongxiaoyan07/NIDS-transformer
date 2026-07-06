@@ -22,12 +22,19 @@ class ContextIndexBuilder:
 
         ctx = cfg["context"]
         self.method = ctx.get("method", "endpoint")
-        self.k = int(ctx.get("window_size", 16))
+        self.window_size = int(ctx.get("window_size", 16))
         self.include_target = bool(ctx.get("include_target", True))
-        self.context_policy = ctx.get("context_policy", "online")
+
+        if self.include_target:
+            self.k = max(self.window_size - 1, 0)
+        else:
+            self.k = self.window_size
+
+        self.context_policy = ctx.get("context_policy", "split_isolated")
         self.endpoint_mode = ctx.get("endpoint_mode", "same_endpoint")
         self.deduplicate = bool(ctx.get("deduplicate", True))
-
+        print(f"[S2-ContextIndexBuilder]--context method: {self.method}, window_size: {self.window_size}, include_target: {self.include_target}, "
+              f"context_policy: {self.context_policy}, endpoint_mode: {self.endpoint_mode}, deduplicate: {self.deduplicate}")
         self._validate()
 
     def _validate(self) -> None:

@@ -8,6 +8,7 @@ import os
 import random
 import time
 from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -95,46 +96,69 @@ class SharedStage2Dataset(Dataset):
     def __len__(self) -> int:
         return int(self.target_rows.size)
 
-    def __getitem__(self, i: int) -> Dict[str, Any]:
-        row_idx = int(self.target_rows[i])
-        ctx_idx = self.context_indices[row_idx]
+        def __getitem__(self, i: int) -> Dict[str, Any]:
+            row_idx = int(self.target_rows[i])
+            ctx_idx = self.context_indices[row_idx]
+            if len(ctx_idx) > 0:
+                assert int(ctx_idx[-1]) == row_idx, (
+                    f"Current flow is not the last context token: "
+                    f"row_idx={row_idx}, ctx_last={ctx_idx[-1]}"
+                )
+            # 根据上下文索引取 embedding。
+            if len(ctx_idx) == 0:
+                context_z = np.zeros((0, self.z.shape[1]), dtype=np.float32)
+            else:
+                context_z = self.z[ctx_idx]
 
-        if len(ctx_idx) == 0:
-            context_z = torch.empty((0, self.z.shape[1]), dtype=torch.float32)
+            return {
+                "context_z": torch.as_tensor(context_z).float(),
+                "mask": torch.ones(len(ctx_idx), dtype=torch.bool),
+                # "label": torch.tensor(int(self.meta_df.at[row_idx, "label"]), dtype=torch.long),
+                "label": torch.tensor(int(self.labels[i]), dtype=torch.long),
+                "flow_id": int(self.meta_df.at[row_idx, "flow_id"]),
+                "row_idx": row_idx,
+            }
+
+def stage2_collate_fn(
+        batch: List[Dict[str, Any]],
+        fixed_max_len: Optional[int] = None,
+) -> Dict[str, torch.Tensor]:
+        batch_size = len(batch)
+        # embedding 维度。
+        d_model = batch[0]["context_z"].shape[1]
+
+        if fixed_max_len is None:
+            # 找当前 batch 中最长的上下文长度。
+            max_len = max(1, max(int(item["context_z"].shape[0]) for item in batch))
         else:
-            # NumPy advanced indexing returns a compact array for this sample only.
-            context_z = torch.from_numpy(self.z[ctx_idx])
+            max_len = int(fixed_max_len)
+
+        x = torch.zeros(batch_size, max_len, d_model, dtype=torch.float32)
+        mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
+
+        labels = torch.stack([item["label"] for item in batch])
+        flow_ids = torch.tensor([item["flow_id"] for item in batch], dtype=torch.long)
+        row_idx = torch.tensor([item["row_idx"] for item in batch], dtype=torch.long)
+
+        for i, item in enumerate(batch):
+            context_z = item["context_z"]
+            length = int(context_z.shape[0])
+
+            if length > max_len:
+                context_z = context_z[-max_len:]
+                length = max_len
+
+            if length > 0:
+                x[i, max_len - length:] = context_z
+                mask[i, max_len - length:] = True
 
         return {
-            "context_z": context_z,
-            "label": int(self.labels[i]),
-            "flow_id": int(self.flow_ids[i]),
+            "context_z": x,
+            "mask": mask,
+            "label": labels,
+            "flow_id": flow_ids,
             "row_idx": row_idx,
         }
-
-
-def stage2_collate_fn(batch: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-    batch_size = len(batch)
-    input_dim = int(batch[0]["context_z"].shape[1])
-    max_len = max(1, max(int(item["context_z"].shape[0]) for item in batch))
-
-    x = torch.zeros((batch_size, max_len, input_dim), dtype=torch.float32)
-    mask = torch.zeros((batch_size, max_len), dtype=torch.bool)
-
-    for i, item in enumerate(batch):
-        length = int(item["context_z"].shape[0])
-        if length > 0:
-            # Keep the same left-padding convention as the user's Stage2 code.
-            x[i, max_len - length :] = item["context_z"]
-            mask[i, max_len - length :] = True
-
-    return {
-        "context_z": x,
-        "mask": mask,
-        "label": torch.tensor([item["label"] for item in batch], dtype=torch.long),
-        "flow_id": torch.tensor([item["flow_id"] for item in batch], dtype=torch.long),
-        "row_idx": torch.tensor([item["row_idx"] for item in batch], dtype=torch.long),
-    }
 
 
 # ============================================================
@@ -218,6 +242,9 @@ def make_loss_fn(
 
     raise ValueError(f"Unknown training.loss_type: {loss_type}")
 
+def make_stage2_collate(cfg):
+    fixed_max_len = max(1, int(cfg["context"].get("window_size", 16)))
+    return partial(stage2_collate_fn, fixed_max_len=fixed_max_len)
 
 def make_loader(
     dataset: SharedStage2Dataset,
@@ -234,11 +261,12 @@ def make_loader(
     num_workers = int(train_cfg.get("num_workers", 0))
     pin_memory = torch.cuda.is_available()
 
+    collate = make_stage2_collate(cfg)
     kwargs: Dict[str, Any] = {
         "dataset": dataset,
         "batch_size": batch_size,
         "num_workers": num_workers,
-        "collate_fn": stage2_collate_fn,
+        "collate_fn": collate,
         "worker_init_fn": worker_init_fn,
         "pin_memory": pin_memory,
         "generator": torch.Generator().manual_seed(seed),

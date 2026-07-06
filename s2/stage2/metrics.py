@@ -122,7 +122,7 @@ def classification_metrics(y_true, y_pred, y_score, loss=None, threshold=None, n
         pr_auc = 0.0
 
     # ============ 混淆矩阵 ============
-    cm = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(num_classes)))
 
     # ============ 构建结果字典 ============
     metrics = {

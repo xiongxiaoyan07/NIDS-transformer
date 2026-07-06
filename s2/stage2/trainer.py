@@ -14,6 +14,7 @@ from .losses import compute_class_alpha,FocalLossWithLabelSmoothing
 from .utils import metric_value, save_json, worker_init_fn
 from .metrics import classification_metrics
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from functools import partial
 
 def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.device) -> nn.Module:
     train_cfg = cfg["training"]
@@ -40,6 +41,7 @@ def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.de
         else:
             # ⭐ 手动指定 alpha（在配置中设置）
             manual_alpha = train_cfg.get("alpha", None)
+            print(f"[INFO]manual_alpha = {manual_alpha}")
             if manual_alpha is not None:
                 alpha = torch.tensor(manual_alpha, dtype=torch.float32, device=device)
                 print(f"[INFO] Using manual alpha: {manual_alpha}")
@@ -57,11 +59,15 @@ def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.de
 
     raise ValueError(f"Unknown training.loss_type: {loss_type}")
 
+def make_stage2_collate(cfg):
+    fixed_max_len = max(1, int(cfg["context"].get("window_size", 16)))
+    return partial(stage2_collate_fn, fixed_max_len=fixed_max_len)
+
 def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader:
     train_cfg = cfg["training"]
     batch_size = int(train_cfg.get("batch_size", 64))
     num_workers = int(train_cfg.get("num_workers", 0))
-
+    collate = make_stage2_collate(cfg)
     # 不要同时使用 WeightedRandomSampler 和类别加权 Focal Loss 当前配置:use_weighted_sampler = False
     if bool(train_cfg.get("use_weighted_sampler", True)):
         labels_np = dataset.labels.astype(int)
@@ -83,14 +89,18 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
             generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))), # 固定种子
         )
 
-        print(f"[INFO] weighted sampler class_counts: {sample_weights}")
+        print(
+            "[INFO] make_train_loader: "
+            f"n0={n0}, n1={n1}, target_pos_frac={target_pos_frac:.3f}, "
+            f"w0={w0:.6g}, w1={w1:.6g}, sample_weights={sample_weights}"
+        )
 
         return DataLoader(
             dataset,
             batch_size=batch_size,
             sampler=sampler,
             num_workers=num_workers,
-            collate_fn=stage2_collate_fn,
+            collate_fn=collate,
             worker_init_fn=worker_init_fn,
             pin_memory=torch.cuda.is_available(),
             generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
@@ -102,20 +112,21 @@ def make_train_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader
         shuffle=True,
         num_workers=num_workers,
         worker_init_fn=worker_init_fn,
-        collate_fn=stage2_collate_fn,
+        collate_fn=collate,
         pin_memory=torch.cuda.is_available(),
         generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
     )
 
 def make_eval_loader(dataset: Stage2Dataset, cfg: Dict[str, Any]) -> DataLoader:
     train_cfg = cfg["training"]
+    collate = make_stage2_collate(cfg)
     return DataLoader(
         dataset,
         batch_size=int(train_cfg.get("batch_size", 64)),
         shuffle=False,
         num_workers=int(train_cfg.get("num_workers", 0)),
         worker_init_fn=worker_init_fn,
-        collate_fn=stage2_collate_fn,
+        collate_fn=collate,
         pin_memory=torch.cuda.is_available(),
         generator=torch.Generator().manual_seed(int(cfg.get("seed", 42))),
     )
@@ -127,7 +138,7 @@ def train_one_epoch(
     loss_fn: nn.Module,
     device: torch.device,
     grad_clip_norm: Optional[float],
-    scaler: Optional[torch.cuda.amp.GradScaler],
+    scaler: Optional[torch.amp.GradScaler],
 ) -> float:
     model.train()
     total_loss = torch.zeros((), device=device, dtype=torch.float32)
@@ -139,19 +150,30 @@ def train_one_epoch(
         y = batch["label"].to(device, non_blocking=True)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.amp.autocast('cuda'):
+        amp_enabled = scaler is not None and scaler.is_enabled()
+        amp_dtype = torch.float16 if device.type == "cuda" else torch.bfloat16
+        with torch.autocast(
+            device_type=device.type,
+            dtype=amp_dtype,
+            enabled=amp_enabled,
+        ):
             logits = model(x, mask)
             loss = loss_fn(logits, y)
-        scaler.scale(loss).backward()
-        # loss.backward()
 
-        if grad_clip_norm is not None and grad_clip_norm > 0:
-            scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+        if scaler is not None and scaler.is_enabled():
+            scaler.scale(loss).backward()
 
-        # optimizer.step()
-        scaler.step(optimizer)
-        scaler.update()
+            if grad_clip_norm is not None and grad_clip_norm > 0:
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if grad_clip_norm is not None and grad_clip_norm > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+            optimizer.step()
 
         bs = int(y.size(0))
         total_loss += loss.detach().float() * bs
@@ -176,9 +198,6 @@ def evaluate(
     all_pred: List[np.ndarray] = []
     all_score: List[np.ndarray] = []
     all_flow_ids: List[int] = []
-    total_loss = 0.0
-    num_batches = 0
-
     for batch in loader:
         x = batch["context_z"].to(device, non_blocking=True)
         mask = batch["mask"].to(device, non_blocking=True)
@@ -206,13 +225,11 @@ def evaluate(
         all_pred.append(preds.detach())
         all_score.append(score_label1.detach())
         all_flow_ids.extend(batch["flow_id"].cpu().numpy().tolist())
-        total_loss += loss.item()
-        num_batches += 1
 
     y_true = torch.cat(all_y).cpu().numpy()
     y_pred = torch.cat(all_pred).cpu().numpy()
     y_score = torch.cat(all_score).cpu().numpy()
-    avg_loss = total_loss / num_batches
+    avg_loss = float(np.sum(losses) / max(len(y_true), 1))
 
     metrics = classification_metrics(
         y_true=y_true,
@@ -223,7 +240,7 @@ def evaluate(
         threshold=threshold,
     )
 
-    metrics["loss"] = avg_loss #float(np.sum(losses) / max(len(y_true), 1))
+    metrics["loss"] = avg_loss
     metrics["num_samples"] = int(len(y_true))
     metrics["positive_count"] = int(y_true.sum())
     metrics["positive_rate"] = float(y_true.mean()) if len(y_true) else 0.0
@@ -266,7 +283,7 @@ def find_best_threshold(
             threshold=float(t),
         )
 
-        if metric == "f1_label1":
+        if metric in {"f1", "f1_label1"}:
             value = metrics["f1_label1"]
         elif metric == "recall":
             value = metrics["recall_label1"]
@@ -334,23 +351,22 @@ class Stage2Trainer:
         epochs = int(self.cfg["training"].get("epochs", 100))
         patience = int(self.cfg["training"].get("patience", 20))
         threshold = float(self.cfg["training"].get("threshold", 0.5))
-        metric_for_best = self.cfg["training"].get("metric_for_best", "val_f1")
-        print("[Stage2Trainer]---fit----metric_for_best = ", metric_for_best)
+        metric_for_best = self.cfg["training"].get("metric_for_best", "f1_label1")
 
         grad_clip_norm = self.cfg["training"].get("grad_clip_norm", 1.0)
         grad_clip_norm = None if grad_clip_norm is None else float(grad_clip_norm)
 
+        lr = float(self.cfg["training"].get("lr", 3e-4))
+        weight_decay = float(self.cfg["training"].get("weight_decay", 3e-4))
+        print(f"[Stage2Trainer]---fit lr={lr}, weight_decay={weight_decay}, patience={patience}, threshold={threshold}, metric_for_best={metric_for_best}")
         # 你的原代码 warmup_epochs = min(10, epochs // 10)。
         # 这里加 max(1, ...) 防止 epochs 较小时 warmup_epochs=0。
-        warmup_epochs = max(1, min(20, epochs // 10))
-        print("[Stage2Trainer] ---- fit ------warmup_epochs = ", warmup_epochs)
-        cosine_epochs = max(1, epochs - warmup_epochs)
+        warmup_epochs = max(1, min(5, epochs // 10))
 
-        lr = float(self.cfg["training"].get("lr", 3e-4))
-        print("[Stage2Trainer]---fit lr= ", lr)
+        cosine_epochs = max(1, epochs - warmup_epochs)
         warmup_scheduler = LinearLR(
             self.optimizer,
-            start_factor=0.1,
+            start_factor=0.05,
             end_factor=1.0,
             total_iters=warmup_epochs,
         )
@@ -367,7 +383,12 @@ class Stage2Trainer:
             milestones=[warmup_epochs],
         )
 
-        scaler = torch.amp.GradScaler('cuda')
+        amp_enabled = self.device.type == "cuda"
+        scaler = (
+            torch.amp.GradScaler("cuda", enabled=amp_enabled)
+            if self.device.type == "cuda"
+            else None
+        )
         best_score = -float("inf")
         best_epoch = -1
         bad_epochs = 0
@@ -384,31 +405,45 @@ class Stage2Trainer:
                 scaler=scaler
             )
 
-            scheduler.step()
-
             metrics_by_split = {}
 
-            metrics = evaluate(
+            metrics_05, val_pred_df = evaluate(
                 model=self.model,
                 loader=self.eval_loaders["val"],
                 loss_fn=self.loss_fn,
                 device=self.device,
-                threshold=threshold,
-                return_predictions=False
+                threshold=0.5,
+                return_predictions=True,
+                amp_enabled=(self.device.type == "cuda"),
             )
 
-            metrics_by_split["val"] = metrics
-            # for split, loader in self.eval_loaders.items():
-            #     metrics, _ = evaluate(
-            #         model=self.model,
-            #         loader=loader,
-            #         loss_fn=self.loss_fn,
-            #         device=self.device,
-            #         threshold=threshold,
-            #     )
-            #     metrics_by_split[split] = metrics
+            if bool(self.cfg["training"].get("select_threshold_each_epoch", True)):
+                # print("********select_threshold_each_epoch*********")
+                best_th, best_th_metrics = find_best_threshold(
+                    y_true=val_pred_df["label"].to_numpy(),
+                    y_score=val_pred_df["prob_label_1"].to_numpy(),
+                    metric=self.cfg["training"].get("threshold_metric", "f1_label1"),
+                    threshold_min=float(self.cfg["training"].get("threshold_min", 0.01)),
+                    threshold_max=float(self.cfg["training"].get("threshold_max", 0.99)),
+                    threshold_steps=int(self.cfg["training"].get("threshold_steps", 199)),
+                )
+                print("fit------best threshold = ", best_th)
+                metrics = dict(best_th_metrics)
+                metrics["selected_threshold"] = float(best_th)
 
+                # 保留 ranking metrics
+                metrics["loss"] = metrics_05["loss"]
+                metrics["auc"] = metrics_05["auc"]
+                metrics["pr_auc"] = metrics_05["pr_auc"]
+                metrics["num_samples"] = metrics_05["num_samples"]
+                metrics["positive_count"] = metrics_05["positive_count"]
+                metrics["positive_rate"] = metrics_05["positive_rate"]
+            else:
+                metrics = metrics_05
+
+            metrics_by_split["val"] = metrics
             score = metric_value(metrics_by_split, metric_for_best)
+            scheduler.step()
             min_delta = float(self.cfg["training"].get("min_delta", 0.0))
             improved = score > best_score + min_delta
             if improved:
@@ -424,11 +459,13 @@ class Stage2Trainer:
             else:
                 bad_epochs += 1
 
+            current_lr = float(self.optimizer.param_groups[0]["lr"])
             row = {
                 "epoch": epoch,
                 "train_loss_optim": train_loss,
                 "best_epoch": best_epoch,
                 "best_score": best_score,
+                "current_lr": current_lr,
             }
             for split, metrics in metrics_by_split.items():
                 for key, value in metrics.items():
@@ -445,16 +482,121 @@ class Stage2Trainer:
                 f"[EPOCH {epoch:03d}] "
                 f"train_loss={train_loss:.6f} "
                 f"val_loss={metrics_by_split['val']['loss']:.6f} "
+                f"val_f1_label1={metrics_by_split['val']['f1_label1']:.4f} "
                 f"val_macro_f1={metrics_by_split['val']['macro_f1']:.4f} "
                 f"val_weighted_f1={metrics_by_split['val']['weighted_f1']} "
-                f"val_f1_label1={metrics_by_split['val']['f1_label1']:.4f} "
+                f"val_pr_auc={metrics_by_split['val']['pr_auc']:.4f} "
                 f"val_auc={metrics_by_split['val']['auc']:.4f}"
+                f"lr={current_lr:.8f} "
                 f"{'*' if improved else ''}"
             )
 
             if 0 < patience <= bad_epochs:
                 print(f"[INFO] Early stopping at epoch={epoch}, best_epoch={best_epoch}")
                 break
+
+    def threshold_oracle_diagnosis(
+            self,
+            val_threshold: float,
+    ) -> Dict[str, Any]:
+        """
+        Diagnostic only.
+
+        Purpose:
+        1. Use validation-selected threshold on test set.
+        2. Also compute test oracle threshold.
+        3. Measure threshold transfer gap.
+
+        This should NOT be used as the official test result.
+        The official result must use val_threshold.
+        """
+
+        _, val_pred_df = evaluate(
+            model=self.model,
+            loader=self.eval_loaders["val"],
+            loss_fn=self.loss_fn,
+            device=self.device,
+            threshold=0.5,
+            return_predictions=True,
+            amp_enabled=(self.device.type == "cuda"),
+        )
+
+        _, test_pred_df = evaluate(
+            model=self.model,
+            loader=self.eval_loaders["test"],
+            loss_fn=self.loss_fn,
+            device=self.device,
+            threshold=0.5,
+            return_predictions=True,
+            amp_enabled=(self.device.type == "cuda"),
+        )
+
+        y_val = val_pred_df["label"].to_numpy()
+        p_val = val_pred_df["prob_label_1"].to_numpy()
+
+        y_test = test_pred_df["label"].to_numpy()
+        p_test = test_pred_df["prob_label_1"].to_numpy()
+
+        val_oracle_threshold, val_oracle_metrics = find_best_threshold(
+            y_true=y_val,
+            y_score=p_val,
+            metric=self.cfg["training"].get("threshold_metric", "f1_label1"),
+            threshold_min=float(self.cfg["training"].get("threshold_min", 0.01)),
+            threshold_max=float(self.cfg["training"].get("threshold_max", 0.99)),
+            threshold_steps=int(self.cfg["training"].get("threshold_steps", 199)),
+        )
+
+        test_at_val_metrics = classification_metrics(
+            y_true=y_test,
+            y_pred=(p_test >= float(val_threshold)).astype(int),
+            y_score=p_test,
+            num_classes=2,
+            threshold=float(val_threshold),
+        )
+
+        test_oracle_threshold, test_oracle_metrics = find_best_threshold(
+            y_true=y_test,
+            y_score=p_test,
+            metric=self.cfg["training"].get("threshold_metric", "f1_label1"),
+            threshold_min=float(self.cfg["training"].get("threshold_min", 0.01)),
+            threshold_max=float(self.cfg["training"].get("threshold_max", 0.99)),
+            threshold_steps=int(self.cfg["training"].get("threshold_steps", 199)),
+        )
+
+        threshold_transfer_gap = (
+                float(test_oracle_metrics["f1_label1"])
+                - float(test_at_val_metrics["f1_label1"])
+        )
+
+        diagnosis = {
+            "val_oracle_threshold": float(val_oracle_threshold),
+            "val_oracle_metrics": val_oracle_metrics,
+            "val_selected_threshold": float(val_threshold),
+            "test_at_val_threshold": test_at_val_metrics,
+            "test_oracle_threshold": float(test_oracle_threshold),
+            "test_oracle_metrics": test_oracle_metrics,
+            "threshold_transfer_gap": threshold_transfer_gap,
+        }
+
+        print("\n========== STAGE2 THRESHOLD ORACLE DIAGNOSIS ==========")
+        print(f"[VAL ORACLE THRESHOLD] {val_oracle_threshold:.6f}")
+        print("[VAL ORACLE METRICS]", val_oracle_metrics)
+
+        print(f"\n[TEST AT VAL THRESHOLD] {val_threshold:.6f}")
+        print("[TEST AT VAL THRESHOLD METRICS]", test_at_val_metrics)
+
+        print(f"\n[TEST ORACLE THRESHOLD - DIAGNOSTIC ONLY] {test_oracle_threshold:.6f}")
+        print("[TEST ORACLE METRICS]", test_oracle_metrics)
+
+        print(f"\n[THRESHOLD TRANSFER GAP] {threshold_transfer_gap:.6f}")
+        print("=======================================================\n")
+
+        save_json(
+            diagnosis,
+            os.path.join(self.out_dir, "stage2_threshold_oracle_diagnosis.json"),
+        )
+
+        return diagnosis
     # load best model
     def load_best(self) -> Dict[str, Any]:
         path = os.path.join(self.out_dir, "stage2_best_model.pt")
@@ -478,22 +620,29 @@ class Stage2Trainer:
             threshold, threshold_metrics = find_best_threshold(
                 y_true=val_pred_df["label"].to_numpy(),
                 y_score=val_pred_df["prob_label_1"].to_numpy(),
-                metric=self.cfg["training"].get("threshold_metric", "f1"),
+                metric=self.cfg["training"].get("threshold_metric", "f1_label1"),
                 threshold_min=float(self.cfg["training"].get("threshold_min", 0.01)),
                 threshold_max=float(self.cfg["training"].get("threshold_max", 0.99)),
-                threshold_steps=int(self.cfg["training"].get("threshold_steps", 99)),
+                threshold_steps=int(self.cfg["training"].get("threshold_steps", 199)),
             )
 
             self.cfg["training"]["threshold"] = threshold
             print(f"[INFO] Auto-selected threshold on val: {threshold:.4f}")
             print(f"[INFO] Val metrics at selected threshold: {threshold_metrics}")
-
+        # ============================================================
+        # Diagnostic only: threshold transfer / test oracle
+        # Must be after load_best() and after val threshold selection.
+        # ============================================================
+        threshold_diagnosis = self.threshold_oracle_diagnosis(
+            val_threshold=threshold,
+        )
         context_lengths = np.array([len(x) for x in context_indices], dtype=np.int64)
         final_metrics: Dict[str, Any] = {
             "best_epoch": int(ckpt["epoch"]),
             "best_score": float(ckpt["best_score"]),
             "metric_for_best": ckpt["metric_for_best"],
             "threshold": float(threshold),
+            "threshold_diagnosis": threshold_diagnosis,
             "config": self.cfg,
             "data": {
                 "num_flows": int(len(meta_df)),
@@ -590,6 +739,7 @@ class Stage2Trainer:
                     f"weighted_recall={metrics['weighted_recall']:.6f}, "
                     f"weighted_f1={metrics['weighted_f1']:.6f}, "
                     f"auc={metrics['auc']}, "
+                    f"pr_auc={metrics['pr_auc']}, "
                     f"precision_label1={metrics['precision_label1']}, "
                     f"recall_label1={metrics['recall_label1']}, "
                     f"f1_label1={metrics['f1_label1']}, "
@@ -607,8 +757,13 @@ def print_detailed_metrics(test_metrics: Dict[str, Any], class_names: List[str] 
     print("=" * 50)
     print(f"  Loss:              {test_metrics.get('loss', 0):.4f}")
     print(f"  F1 (Macro):        {test_metrics.get('macro_f1', 0):.4f}")
-    print(f"  F1 (Weighted):     {test_metrics.get('weighted_f1', 0):.4f}")
+    print(f"  Recall (Macro):    {test_metrics.get('macro_recall', 0):.4f}")
+    print(f"  Precision (Macro): {test_metrics.get('macro_precision', 0):.4f}")
+    print(f"  F1_class1:         {test_metrics.get('f1_label1', 0):.4f}")
+    print(f"  R1_class1:         {test_metrics.get('recall_label1', 0):.4f}")
+    print(f"  P1_class1:         {test_metrics.get('precision_label1', 0):.4f}")
     print(f"  AUC (OvR Macro):   {test_metrics.get('auc', 0):.4f}")
+    print(f"  PR_AUC:            {test_metrics.get('pr_auc', 0):.4f}")
     print(f"{'=' * 50}")
 
     # 各类别 F1
