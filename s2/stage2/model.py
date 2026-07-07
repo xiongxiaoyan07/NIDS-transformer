@@ -805,6 +805,11 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
 
         return Stage2TargetQueryGatedAttention(cfg, input_dim=input_dim)
 
+    if model_type in {"target_query_residual", "target_query_residual_attention"}:
+        from .target_query import Stage2TargetQueryResidualAttention
+
+        return Stage2TargetQueryResidualAttention(cfg, input_dim=input_dim)
+
     if model_type == "residual_transformer":
         return Stage2ResidualContextTransformer(cfg, input_dim)
 
@@ -816,5 +821,6 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
 
     raise ValueError(
         f"Unknown model.model_type: {model_type}. "
-        "Choose from: no_context_mlp, target_query_gated, residual_transformer, lstm, transformer."
+        "Choose from: no_context_mlp, target_query_gated, target_query_residual, "
+        "residual_transformer, lstm, transformer."
     )

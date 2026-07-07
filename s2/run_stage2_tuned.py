@@ -92,7 +92,16 @@ def parse_args() -> argparse.Namespace:
         "--model_type",
         type=str,
         default=None,
-        choices=["no_context_mlp", "target_query_gated", "target_query", "lstm", "transformer", "residual_transformer"],
+        choices=[
+            "no_context_mlp",
+            "target_query_gated",
+            "target_query",
+            "target_query_residual",
+            "target_query_residual_attention",
+            "lstm",
+            "transformer",
+            "residual_transformer",
+        ],
         help="Override model.model_type",
     )
 
@@ -114,6 +123,23 @@ def parse_args() -> argparse.Namespace:
         "--lstm_bidirectional",
         action="store_true",
         help="Override model.lstm_bidirectional=True",
+    )
+    parser.add_argument(
+        "--context_scale",
+        type=float,
+        default=None,
+        help="Override model.context_scale for residual context models",
+    )
+    parser.add_argument(
+        "--gate_bias_init",
+        type=float,
+        default=None,
+        help="Override model.gate_bias_init for gated residual models",
+    )
+    parser.add_argument(
+        "--use_context_length_feature",
+        action="store_true",
+        help="Override model.use_context_length_feature=True",
     )
     return parser.parse_args()
 
@@ -138,6 +164,12 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[s
         cfg["model"]["cls_head"] = args.cls_head
     if args.model_type is not None:
         cfg["model"]["model_type"] = args.model_type
+    if args.context_scale is not None:
+        cfg["model"]["context_scale"] = args.context_scale
+    if args.gate_bias_init is not None:
+        cfg["model"]["gate_bias_init"] = args.gate_bias_init
+    if args.use_context_length_feature:
+        cfg["model"]["use_context_length_feature"] = True
 
     if args.lstm_hidden_dim is not None:
         cfg["model"]["lstm_hidden_dim"] = args.lstm_hidden_dim
