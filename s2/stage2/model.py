@@ -627,6 +627,168 @@ class Stage2Transformer(nn.Module):
         return self.cls_head(pooled)
 
 
+class Stage2ResidualContextTransformer(nn.Module):
+    """
+    Residual context Transformer.
+
+    final_logits = base_logits(current_z) + context_scale * delta_logits(context)
+
+    This design keeps the strong no-context current-flow classifier
+    and lets historical context only learn a correction term.
+    """
+
+    def __init__(self, cfg: Dict[str, Any], input_dim: int):
+        super().__init__()
+
+        model_cfg = cfg["model"]
+
+        d_model = model_cfg.get("d_model") or input_dim
+        dropout = float(model_cfg.get("dropout", 0.25))
+        num_classes = int(model_cfg.get("num_classes", 2))
+        cls_head_config = int(model_cfg.get("cls_head", 1))
+
+        self.input_dim = int(input_dim)
+        self.d_model = int(d_model)
+        self.context_scale = float(model_cfg.get("context_scale", 0.5))
+        self.pooling = model_cfg.get("pooling", "last")
+
+        self.input_proj = (
+            nn.Identity()
+            if self.input_dim == self.d_model
+            else nn.Linear(self.input_dim, self.d_model)
+        )
+
+        self.use_positional_encoding = bool(model_cfg.get("use_positional_encoding", True))
+        self.position_mode = str(model_cfg.get("position_mode", "age"))
+
+        self.pos = (
+            SinusoidalPositionalEncoding(
+                self.d_model,
+                max_len=int(model_cfg.get("max_len", 512)),
+                position_mode=self.position_mode,
+            )
+            if self.use_positional_encoding
+            else None
+        )
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.d_model,
+            nhead=int(model_cfg.get("nhead", 4)),
+            dim_feedforward=int(model_cfg.get("dim_feedforward", 256)),
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+            norm_first=True,
+        )
+
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=int(model_cfg.get("num_layers", 1)),
+        )
+
+        # Strong no-context branch
+        self.base_head = build_cls_head(
+            d_model=self.d_model,
+            cls_head_config=cls_head_config,
+            dropout=dropout,
+            num_classes=num_classes,
+        )
+
+        # Context correction branch
+        self.delta_head = nn.Sequential(
+            nn.LayerNorm(self.d_model * 3),
+            nn.Dropout(dropout),
+            nn.Linear(self.d_model * 3, self.d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(self.d_model, num_classes),
+        )
+
+        # Gate controls how much context correction is used
+        self.gate = nn.Sequential(
+            nn.LayerNorm(self.d_model * 3),
+            nn.Linear(self.d_model * 3, self.d_model),
+            nn.GELU(),
+            nn.Linear(self.d_model, 1),
+            nn.Sigmoid(),
+        )
+
+        print(
+            "[INFO] Stage2ResidualContextTransformer: "
+            f"d_model={self.d_model}, nhead={model_cfg.get('nhead', 4)}, "
+            f"num_layers={model_cfg.get('num_layers', 1)}, "
+            f"dropout={dropout}, context_scale={self.context_scale}"
+        )
+
+    def _history_mask_without_current(self, mask: torch.Tensor) -> torch.Tensor:
+        """
+        Remove the current-flow token from the mask.
+        Since current flow is the last valid token, set that position to False.
+        """
+        history_mask = mask.clone()
+        B, L = mask.shape
+        positions = torch.arange(L, device=mask.device).unsqueeze(0).expand(B, L)
+        last_idx = positions.masked_fill(~mask, -1).max(dim=1).values.clamp(min=0)
+        history_mask[torch.arange(B, device=mask.device), last_idx] = False
+        return history_mask
+
+    def forward(self, context_z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # current-flow representation before context encoding
+        x = self.input_proj(context_z)
+        current_z = last_valid_token(x, mask)
+
+        base_logits = self.base_head(current_z)
+
+        # Use only previous flows for context branch
+        history_mask = self._history_mask_without_current(mask)
+        no_history = ~history_mask.any(dim=1)
+        has_no_history = bool(no_history.any().item())
+
+        if self.use_positional_encoding:
+            x_ctx = self.pos(x, mask)
+        else:
+            x_ctx = x
+
+        safe_history_mask = history_mask
+        if has_no_history:
+            safe_history_mask = history_mask.clone()
+            # Transformer attention cannot receive a row with all keys masked.
+            # Use the current token as a temporary finite key, then zero out
+            # the context residual for these rows below.
+            B, L = mask.shape
+            positions = torch.arange(L, device=mask.device).unsqueeze(0).expand(B, L)
+            current_idx = positions.masked_fill(~mask, -1).max(dim=1).values.clamp(min=0)
+            row_idx = torch.arange(B, device=mask.device)
+            safe_history_mask[row_idx[no_history], current_idx[no_history]] = True
+
+        key_padding_mask = ~safe_history_mask
+
+        h = self.encoder(
+            x_ctx,
+            src_key_padding_mask=key_padding_mask,
+        )
+
+        # Summarize previous flows only
+        context_summary = masked_mean_pooling(h, safe_history_mask)
+        if has_no_history:
+            context_summary = context_summary.masked_fill(no_history.unsqueeze(-1), 0.0)
+
+        fused = torch.cat(
+            [
+                current_z,
+                context_summary,
+                current_z - context_summary,
+            ],
+            dim=-1,
+        )
+
+        delta_logits = self.delta_head(fused)
+        gate = self.gate(fused)
+        if has_no_history:
+            gate = gate.masked_fill(no_history.unsqueeze(-1), 0.0)
+
+        logits = base_logits + self.context_scale * gate * delta_logits
+        return logits
 # ============================================================
 # Model factory
 # ============================================================
@@ -638,6 +800,14 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
     if model_type == "no_context_mlp":
         return Stage2NoContextMLP(cfg, input_dim=input_dim)
 
+    if model_type in {"target_query_gated", "target_query"}:
+        from .target_query import Stage2TargetQueryGatedAttention
+
+        return Stage2TargetQueryGatedAttention(cfg, input_dim=input_dim)
+
+    if model_type == "residual_transformer":
+        return Stage2ResidualContextTransformer(cfg, input_dim)
+
     if model_type == "lstm":
         return Stage2LSTM(cfg, input_dim=input_dim)
 
@@ -646,6 +816,5 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
 
     raise ValueError(
         f"Unknown model.model_type: {model_type}. "
-        "Choose from: no_context_mlp, lstm, transformer."
+        "Choose from: no_context_mlp, target_query_gated, residual_transformer, lstm, transformer."
     )
-

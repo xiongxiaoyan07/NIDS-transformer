@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         "--model_type",
         type=str,
         default=None,
-        choices=["no_context_mlp", "lstm", "transformer"],
+        choices=["no_context_mlp", "target_query_gated", "target_query", "lstm", "transformer", "residual_transformer"],
         help="Override model.model_type",
     )
 
@@ -283,7 +283,6 @@ def print_context_diagnostics(meta_df, context_indices, include_target=True):
     )
 if __name__ == "__main__":
     main()
-
 
 
 
