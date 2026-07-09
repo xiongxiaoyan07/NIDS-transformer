@@ -98,6 +98,11 @@ def parse_args() -> argparse.Namespace:
             "target_query",
             "target_query_residual",
             "target_query_residual_attention",
+            "relation_aware_attention",
+            "relation_aware_target_query",
+            "source_destination_attention",
+            "source_dest_attention",
+            "dual_host_attention",
             "lstm",
             "transformer",
             "residual_transformer",
@@ -131,15 +136,187 @@ def parse_args() -> argparse.Namespace:
         help="Override model.context_scale for residual context models",
     )
     parser.add_argument(
+        "--source_context_scale",
+        type=float,
+        default=None,
+        help="Override model.source_context_scale for source/destination attention",
+    )
+    parser.add_argument(
+        "--destination_context_scale",
+        type=float,
+        default=None,
+        help="Override model.destination_context_scale for source/destination attention",
+    )
+    parser.add_argument(
         "--gate_bias_init",
         type=float,
         default=None,
         help="Override model.gate_bias_init for gated residual models",
     )
     parser.add_argument(
+        "--source_gate_bias_init",
+        type=float,
+        default=None,
+        help="Override model.source_gate_bias_init for source/destination attention",
+    )
+    parser.add_argument(
+        "--destination_gate_bias_init",
+        type=float,
+        default=None,
+        help="Override model.destination_gate_bias_init for source/destination attention",
+    )
+    parser.add_argument(
         "--use_context_length_feature",
         action="store_true",
         help="Override model.use_context_length_feature=True",
+    )
+    parser.add_argument(
+        "--use_multiplicative_fusion",
+        action="store_true",
+        help="Override model.use_multiplicative_fusion=True",
+    )
+    parser.add_argument(
+        "--metric_for_best",
+        type=str,
+        default=None,
+        help="Override training.metric_for_best",
+    )
+    parser.add_argument(
+        "--threshold_metric",
+        type=str,
+        default=None,
+        choices=[
+            "f1",
+            "f1_label1",
+            "f0.5",
+            "f0_5",
+            "f0.5_label1",
+            "f0_5_label1",
+            "precision",
+            "recall",
+            "macro_f1",
+            "precision_at_recall",
+            "precision_at_recall_floor",
+            "f1_at_recall",
+            "f1_at_recall_floor",
+            "f0.5_at_recall",
+            "f0_5_at_recall",
+            "precision_lcb_at_recall",
+            "precision_lcb_at_recall_floor",
+            "f1_lcb_at_recall",
+            "f1_lcb_at_recall_floor",
+            "recall_at_precision",
+            "recall_at_precision_floor",
+        ],
+        help="Override training.threshold_metric",
+    )
+    parser.add_argument(
+        "--threshold_recall_floor",
+        type=float,
+        default=None,
+        help="Require at least this validation recall when selecting threshold",
+    )
+    parser.add_argument(
+        "--threshold_precision_floor",
+        type=float,
+        default=None,
+        help="Require at least this validation precision when selecting threshold",
+    )
+    parser.add_argument(
+        "--threshold_fbeta_beta",
+        type=float,
+        default=None,
+        help="Beta used by fbeta threshold metrics, e.g. 0.5 favors precision",
+    )
+    parser.add_argument(
+        "--threshold_precision_lcb_z",
+        type=float,
+        default=None,
+        help="Wilson lower-bound z used by precision_lcb threshold metrics",
+    )
+    parser.add_argument(
+        "--sampler_pos_fraction",
+        type=float,
+        default=None,
+        help="Override training.sampler_pos_fraction for WeightedRandomSampler",
+    )
+    parser.add_argument(
+        "--focal_gamma",
+        type=float,
+        default=None,
+        help="Override training.focal_gamma",
+    )
+    parser.add_argument(
+        "--negative_alpha",
+        type=float,
+        default=None,
+        help="Override training.alpha[0] when using manual focal alpha",
+    )
+    parser.add_argument(
+        "--positive_alpha",
+        type=float,
+        default=None,
+        help="Override training.alpha[1] when using manual focal alpha",
+    )
+    parser.add_argument(
+        "--false_positive_penalty_weight",
+        type=float,
+        default=None,
+        help="Add penalty for negative samples with high class-1 probability",
+    )
+    parser.add_argument(
+        "--false_positive_penalty_margin",
+        type=float,
+        default=None,
+        help="Class-1 probability margin above which negatives are penalized",
+    )
+    parser.add_argument(
+        "--false_positive_topk_ratio",
+        type=float,
+        default=None,
+        help="Apply false-positive penalty only to the hardest negative ratio in each batch",
+    )
+    parser.add_argument(
+        "--positive_margin_penalty_weight",
+        type=float,
+        default=None,
+        help="Add small penalty for positives below positive_margin to protect recall",
+    )
+    parser.add_argument(
+        "--positive_margin",
+        type=float,
+        default=None,
+        help="Class-1 probability margin below which positives are penalized",
+    )
+    parser.add_argument(
+        "--relation_source_bias_init",
+        type=float,
+        default=None,
+        help="Override model.relation_source_bias_init for relation-aware attention",
+    )
+    parser.add_argument(
+        "--relation_destination_bias_init",
+        type=float,
+        default=None,
+        help="Override model.relation_destination_bias_init for relation-aware attention",
+    )
+    parser.add_argument(
+        "--relation_endpoint_bias_init",
+        type=float,
+        default=None,
+        help="Override model.relation_endpoint_bias_init for relation-aware attention",
+    )
+    parser.add_argument(
+        "--relation_age_lambda_init",
+        type=float,
+        default=None,
+        help="Override model.relation_age_lambda_init for relation-aware attention",
+    )
+    parser.add_argument(
+        "--relation_bias_scale",
+        type=float,
+        default=None,
+        help="Override model.relation_bias_scale for relation-aware attention",
     )
     return parser.parse_args()
 
@@ -204,16 +381,44 @@ def build_datasets(
     meta_df: pd.DataFrame,
     z_sorted: np.ndarray,
     context_indices: List[np.ndarray],
+    cfg: Dict[str, Any],
 ) -> Dict[str, Stage2Dataset]:
+    source_col = cfg["data"].get("source_col", "source_id")
+    destination_col = cfg["data"].get("destination_col", "destination_id")
+    train_meta = meta_df.copy()
+    train_meta["split"] = "train"
+
     return {
-        split: Stage2Dataset(
+        "train": Stage2Dataset(
+            meta_df_sorted=train_meta,
+            z_sorted=z_sorted,
+            context_indices=context_indices,
+            target_split="train"
+        ),
+        "val": Stage2Dataset(
             meta_df_sorted=meta_df,
             z_sorted=z_sorted,
             context_indices=context_indices,
-            target_split=split,
-        )
-        for split in ["train", "val", "test"]
+            target_split="val"
+        ),
+        "test": Stage2Dataset(
+            meta_df_sorted=meta_df,
+            z_sorted=z_sorted,
+            context_indices=context_indices,
+            target_split="test"
+        ),
     }
+    # return {
+    #     split: Stage2Dataset(
+    #         meta_df_sorted=meta_df,
+    #         z_sorted=z_sorted,
+    #         context_indices=context_indices,
+    #         target_split=split,
+    #         source_col=cfg["data"].get("source_col", "source_id"),
+    #         destination_col=cfg["data"].get("destination_col", "destination_id"),
+    #     )
+    #     for split in ["train", "val", "test"]
+    # }
 
 def main() -> None:
     args = parse_args()
@@ -250,7 +455,7 @@ def main() -> None:
     print_data_summary(meta_df, z_sorted, context_indices)
 
     print("[INFO] Stage2 --------- build_datasets")
-    datasets = build_datasets(meta_df, z_sorted, context_indices)
+    datasets = build_datasets(meta_df, z_sorted, context_indices, cfg)
 
     input_dim = int(z_sorted.shape[1])
     print("[INFO] Stage2 --------- input_dim = ", input_dim)
