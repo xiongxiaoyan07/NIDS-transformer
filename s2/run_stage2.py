@@ -387,7 +387,7 @@ def build_datasets(
     destination_col = cfg["data"].get("destination_col", "destination_id")
     train_meta = meta_df.copy()
     train_meta["split"] = "train"
-
+    print("*********train_meta************",train_meta.shape)
     return {
         "train": Stage2Dataset(
             meta_df_sorted=train_meta,
