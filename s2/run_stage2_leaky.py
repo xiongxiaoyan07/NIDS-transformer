@@ -370,3 +370,15 @@ if __name__ == "__main__":
 #   --leak_eval_fraction 0.5 \
 #   --leak_eval_seed 130 \
 #   --clean_context
+
+# !python /content/drive/MyDrive/s2/run_stage2_leaky.py \
+#   --stage1_dir /content/drive/MyDrive/s1/0704/0704C_ar002_et12_20260511_001 \
+#   --config /content/drive/MyDrive/s2/0709ar002_et12_20260511_001/leakage/stage2_config_used.yaml \
+#   --out_dir /content/drive/MyDrive/s2/0709ar002_et12_20260511_001/leakage \
+#   --context_method source_host \
+#   --context_policy online \
+#   --window_size 128 \
+#   --seed 130 \
+#   --epochs 100 \
+#   --batch_size 128 \
+#   --leak_train_on_eval
