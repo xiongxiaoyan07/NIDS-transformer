@@ -987,6 +987,7 @@ class Stage1TimeAwareTransformer(nn.Module):
 
             flow_token_h = h_aug[:, 0]
             packet_h = h_aug[:, 1:]
+            h = packet_h
 
             z_packet = self.attention_pool(packet_h, mask)
 

@@ -21,7 +21,7 @@ DEFAULT_CFG: Dict[str, Any] = {
         "destination_col": "destination_id",
     },
     "context": {
-        # time_only / source_host / destination_host / endpoint
+        # time_only / source_host / destination_host / endpoint / source_destination
         "method": "time_only",
         "window_size": 16,
         "include_target": True,
@@ -43,6 +43,9 @@ DEFAULT_CFG: Dict[str, Any] = {
     },
     "model": {
         # None means use Stage1 z dimension directly.
+        # model_type can be transformer / target_query_gated /
+        # target_query_residual / relation_aware_attention /
+        # source_destination_attention / residual_transformer.
         "d_model": None,
         "nhead": 8,
         "num_layers": 2,
