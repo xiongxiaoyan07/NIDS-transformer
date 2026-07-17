@@ -375,6 +375,218 @@ class Stage2LSTM(nn.Module):
         return self.cls_head(pooled)
 
 
+class Stage2GRU(nn.Module):
+    """
+    GRU context baseline.
+
+    Uses the same Stage2 inputs and pooling options as Stage2LSTM, but replaces
+    the recurrent encoder with GRU.
+    """
+
+    def __init__(self, cfg: Dict[str, Any], input_dim: int):
+        super().__init__()
+
+        model_cfg = cfg["model"]
+
+        d_model = model_cfg.get("d_model") or input_dim
+        hidden_dim = int(model_cfg.get("gru_hidden_dim", model_cfg.get("lstm_hidden_dim", d_model)))
+        num_layers = int(model_cfg.get("gru_num_layers", model_cfg.get("lstm_num_layers", model_cfg.get("num_layers", 2))))
+        dropout = float(model_cfg.get("dropout", 0.3))
+        bidirectional = bool(model_cfg.get("gru_bidirectional", model_cfg.get("lstm_bidirectional", False)))
+        pooling = model_cfg.get("pooling", "last")
+        num_classes = int(model_cfg.get("num_classes", 2))
+        cls_head_config = int(model_cfg.get("cls_head", 0))
+
+        if pooling not in {"last", "mean", "attention"}:
+            raise ValueError(f"Unknown model.pooling for GRU: {pooling}")
+
+        self.input_dim = int(input_dim)
+        self.d_model = int(d_model)
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.bidirectional = bidirectional
+        self.pooling = pooling
+
+        self.input_proj = (
+            nn.Identity()
+            if self.input_dim == self.d_model
+            else nn.Linear(self.input_dim, self.d_model)
+        )
+
+        self.gru = nn.GRU(
+            input_size=self.d_model,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+            bidirectional=bidirectional,
+        )
+
+        out_dim = hidden_dim * (2 if bidirectional else 1)
+        if self.pooling == "attention":
+            self.att_pool = AttentionPooling(out_dim)
+
+        self.cls_head = build_cls_head(
+            d_model=out_dim,
+            dropout=dropout,
+            num_classes=num_classes,
+            cls_head_config=cls_head_config,
+        )
+
+    def forward(self, context_z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        x, lengths = compact_left_padded_sequences(context_z, mask)
+        x = self.input_proj(x)
+
+        packed = pack_padded_sequence(
+            x,
+            lengths.detach().cpu(),
+            batch_first=True,
+            enforce_sorted=False,
+        )
+        packed_out, h_n = self.gru(packed)
+
+        h, _ = pad_packed_sequence(
+            packed_out,
+            batch_first=True,
+            total_length=x.size(1),
+        )
+
+        B, L, _ = h.shape
+        device = h.device
+        right_mask = (
+            torch.arange(L, device=device).unsqueeze(0)
+            < lengths.to(device).unsqueeze(1)
+        )
+
+        if self.pooling == "last":
+            if self.bidirectional:
+                pooled = torch.cat([h_n[-2], h_n[-1]], dim=-1)
+            else:
+                pooled = h_n[-1]
+        elif self.pooling == "mean":
+            pooled = masked_mean_pooling(h, right_mask)
+        else:
+            pooled = self.att_pool(h, right_mask)
+
+        return self.cls_head(pooled)
+
+
+class Stage2CNNLSTMCompat(nn.Module):
+    """
+    CNN+LSTM context baseline compatible with Stage2Trainer.
+
+    Multi-kernel 1D CNN extracts local context patterns before an LSTM encoder.
+    The output is raw class logits with shape [B, num_classes].
+    """
+
+    def __init__(self, cfg: Dict[str, Any], input_dim: int):
+        super().__init__()
+
+        model_cfg = cfg["model"]
+
+        d_model = model_cfg.get("d_model") or input_dim
+        dropout = float(model_cfg.get("dropout", 0.3))
+        pooling = model_cfg.get("pooling", "last")
+        num_classes = int(model_cfg.get("num_classes", 2))
+        cls_head_config = int(model_cfg.get("cls_head", 0))
+        cnn_kernel_sizes = model_cfg.get("cnn_kernel_sizes", [3, 5, 7])
+        cnn_out_channels = int(model_cfg.get("cnn_out_channels", d_model))
+        hidden_dim = int(model_cfg.get("cnn_lstm_hidden_dim", model_cfg.get("lstm_hidden_dim", d_model)))
+        num_layers = int(model_cfg.get("cnn_lstm_num_layers", model_cfg.get("lstm_num_layers", model_cfg.get("num_layers", 2))))
+        bidirectional = bool(model_cfg.get("cnn_lstm_bidirectional", model_cfg.get("lstm_bidirectional", False)))
+
+        if pooling not in {"last", "mean", "attention"}:
+            raise ValueError(f"Unknown model.pooling for CNN+LSTM: {pooling}")
+
+        self.input_dim = int(input_dim)
+        self.d_model = int(d_model)
+        self.pooling = pooling
+        self.bidirectional = bidirectional
+
+        self.input_proj = (
+            nn.Identity()
+            if self.input_dim == self.d_model
+            else nn.Linear(self.input_dim, self.d_model)
+        )
+
+        self.convs = nn.ModuleList([
+            nn.Conv1d(self.d_model, cnn_out_channels, int(k), padding=int(k) // 2)
+            for k in cnn_kernel_sizes
+        ])
+
+        cnn_total = cnn_out_channels * len(cnn_kernel_sizes)
+        self.cnn_project = nn.Sequential(
+            nn.Linear(cnn_total, self.d_model),
+            nn.LayerNorm(self.d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        self.lstm = nn.LSTM(
+            input_size=self.d_model,
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0.0,
+            bidirectional=bidirectional,
+        )
+
+        out_dim = hidden_dim * (2 if bidirectional else 1)
+        if self.pooling == "attention":
+            self.att_pool = AttentionPooling(out_dim)
+
+        self.cls_head = build_cls_head(
+            d_model=out_dim,
+            dropout=dropout,
+            num_classes=num_classes,
+            cls_head_config=cls_head_config,
+        )
+
+    def forward(self, context_z: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        x, lengths = compact_left_padded_sequences(context_z, mask)
+        x = self.input_proj(x)
+
+        B, L, _ = x.shape
+        device = x.device
+        right_mask = (
+            torch.arange(L, device=device).unsqueeze(0)
+            < lengths.to(device).unsqueeze(1)
+        )
+        valid_mask = right_mask.unsqueeze(-1).to(dtype=x.dtype)
+
+        z = x * valid_mask
+        z_t = z.transpose(1, 2)
+        conv_outputs = [conv(z_t).transpose(1, 2) for conv in self.convs]
+        z = torch.cat(conv_outputs, dim=-1)
+        z = self.cnn_project(z) * valid_mask
+
+        packed = pack_padded_sequence(
+            z,
+            lengths.detach().cpu(),
+            batch_first=True,
+            enforce_sorted=False,
+        )
+        packed_out, (h_n, c_n) = self.lstm(packed)
+
+        h, _ = pad_packed_sequence(
+            packed_out,
+            batch_first=True,
+            total_length=L,
+        )
+
+        if self.pooling == "last":
+            if self.bidirectional:
+                pooled = torch.cat([h_n[-2], h_n[-1]], dim=-1)
+            else:
+                pooled = h_n[-1]
+        elif self.pooling == "mean":
+            pooled = masked_mean_pooling(h, right_mask)
+        else:
+            pooled = self.att_pool(h, right_mask)
+
+        return self.cls_head(pooled)
+
+
 class Stage2CNNLSTM(nn.Module):
     """
     CNN+LSTM Baseline for Stage 2
@@ -816,11 +1028,17 @@ def build_stage2_model(cfg: Dict[str, Any], input_dim: int) -> nn.Module:
     if model_type == "lstm":
         return Stage2LSTM(cfg, input_dim=input_dim)
 
+    if model_type == "gru":
+        return Stage2GRU(cfg, input_dim=input_dim)
+
+    if model_type in {"cnn_lstm", "cnnlstm"}:
+        return Stage2CNNLSTMCompat(cfg, input_dim=input_dim)
+
     if model_type == "transformer":
         return Stage2Transformer(cfg, input_dim=input_dim)
 
     raise ValueError(
         f"Unknown model.model_type: {model_type}. "
         "Choose from: no_context_mlp, target_query_gated, target_query_residual, "
-        "residual_transformer, lstm, transformer."
+        "residual_transformer, lstm, gru, cnn_lstm, transformer."
     )

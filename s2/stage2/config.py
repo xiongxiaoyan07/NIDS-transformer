@@ -43,7 +43,8 @@ DEFAULT_CFG: Dict[str, Any] = {
     },
     "model": {
         # None means use Stage1 z dimension directly.
-        # model_type can be transformer / target_query_gated /
+        # model_type can be transformer / lstm / gru / cnn_lstm /
+        # no_context_mlp / target_query_gated /
         # target_query_residual / relation_aware_attention /
         # source_destination_attention / residual_transformer.
         "d_model": None,

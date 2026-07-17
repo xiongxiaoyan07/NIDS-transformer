@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -15,6 +16,23 @@ from .utils import metric_value, save_json, worker_init_fn
 from .metrics import classification_metrics
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from functools import partial
+
+
+def _sync_device(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+
+def model_parameter_profile(model: nn.Module) -> Dict[str, Any]:
+    total = int(sum(p.numel() for p in model.parameters()))
+    trainable = int(sum(p.numel() for p in model.parameters() if p.requires_grad))
+    non_trainable = total - trainable
+    return {
+        "params_total": total,
+        "params_trainable": trainable,
+        "params_non_trainable": non_trainable,
+        "estimated_fp32_size_mb": float(total * 4 / (1024 ** 2)),
+    }
 
 def make_loss_fn(train_labels: np.ndarray, cfg: Dict[str, Any], device: torch.device) -> nn.Module:
     train_cfg = cfg["training"]
@@ -317,6 +335,16 @@ class Stage2Trainer:
         self.device = device
         self.out_dir = out_dir
         self.input_dim = input_dim
+        self.model_profile = model_parameter_profile(self.model)
+        self.training_profile: Dict[str, Any] = {}
+        self.inference_profile: Dict[str, Any] = {}
+
+        print(
+            "[INFO] Stage2 model profile: "
+            f"params_total={self.model_profile['params_total']:,}, "
+            f"params_trainable={self.model_profile['params_trainable']:,}, "
+            f"estimated_fp32_size_mb={self.model_profile['estimated_fp32_size_mb']:.3f}"
+        )
 
         self.train_loader = make_train_loader(datasets["train"], cfg)
         self.eval_loaders = {
@@ -348,6 +376,7 @@ class Stage2Trainer:
             )
     # train model
     def fit(self) -> Dict[str, Any]:
+        _sync_device(self.device)
         epochs = int(self.cfg["training"].get("epochs", 100))
         patience = int(self.cfg["training"].get("patience", 20))
         threshold = float(self.cfg["training"].get("threshold", 0.5))
@@ -393,8 +422,11 @@ class Stage2Trainer:
         best_epoch = -1
         bad_epochs = 0
         epoch_rows: List[Dict[str, Any]] = []
+        last_epoch = 0
 
+        fit_start = time.perf_counter()
         for epoch in range(1, epochs + 1):
+            last_epoch = epoch
             train_loss = train_one_epoch(
                 model=self.model,
                 loader=self.train_loader,
@@ -494,6 +526,25 @@ class Stage2Trainer:
             if 0 < patience <= bad_epochs:
                 print(f"[INFO] Early stopping at epoch={epoch}, best_epoch={best_epoch}")
                 break
+
+        fit_seconds = time.perf_counter() - fit_start
+        _sync_device(self.device)
+        epochs_completed = int(last_epoch)
+        self.training_profile = {
+            "training_time_seconds": float(fit_seconds),
+            "epochs_completed": epochs_completed,
+            "best_epoch": int(best_epoch),
+            "best_score": float(best_score),
+            "early_stopped": bool(0 < patience <= bad_epochs),
+            "avg_seconds_per_epoch": float(fit_seconds / max(epochs_completed, 1)),
+        }
+        print(
+            "[INFO] Stage2 training profile: "
+            f"training_time_seconds={fit_seconds:.2f}, "
+            f"epochs_completed={epochs_completed}, "
+            f"avg_seconds_per_epoch={self.training_profile['avg_seconds_per_epoch']:.2f}"
+        )
+        return self.training_profile
 
     def threshold_oracle_diagnosis(
             self,
@@ -643,6 +694,8 @@ class Stage2Trainer:
             "metric_for_best": ckpt["metric_for_best"],
             "threshold": float(threshold),
             "threshold_diagnosis": threshold_diagnosis,
+            "model_profile": self.model_profile,
+            "training_profile": self.training_profile,
             "config": self.cfg,
             "data": {
                 "num_flows": int(len(meta_df)),
@@ -666,9 +719,12 @@ class Stage2Trainer:
                 },
             },
             "splits": {},
+            "inference_profile": {"splits": {}},
         }
 
         for split, loader in self.eval_loaders.items():
+            _sync_device(self.device)
+            infer_start = time.perf_counter()
             metrics, pred_df = evaluate(
                 model=self.model,
                 loader=loader,
@@ -676,11 +732,35 @@ class Stage2Trainer:
                 device=self.device,
                 threshold=threshold,
             )
+            _sync_device(self.device)
+            infer_seconds = time.perf_counter() - infer_start
             final_metrics["splits"][split] = metrics
+            num_samples = int(metrics.get("num_samples", 0))
+            final_metrics["inference_profile"]["splits"][split] = {
+                "inference_time_seconds": float(infer_seconds),
+                "num_samples": num_samples,
+                "num_batches": int(len(loader)),
+                "seconds_per_sample": float(infer_seconds / max(num_samples, 1)),
+                "samples_per_second": float(num_samples / max(infer_seconds, 1e-12)),
+            }
 
             pred_path = os.path.join(self.out_dir, f"stage2_predictions_{split}.csv")
             pred_df.to_csv(pred_path, index=False)
             print(f"[INFO] saved predictions: {pred_path}")
+
+        test_infer = final_metrics["inference_profile"]["splits"].get("test", {})
+        final_metrics["efficiency"] = {
+            "params_total": int(self.model_profile["params_total"]),
+            "params_trainable": int(self.model_profile["params_trainable"]),
+            "params_non_trainable": int(self.model_profile["params_non_trainable"]),
+            "estimated_fp32_size_mb": float(self.model_profile["estimated_fp32_size_mb"]),
+            "training_time_seconds": self.training_profile.get("training_time_seconds"),
+            "epochs_completed": self.training_profile.get("epochs_completed"),
+            "avg_seconds_per_epoch": self.training_profile.get("avg_seconds_per_epoch"),
+            "inference_time_seconds_test": test_infer.get("inference_time_seconds"),
+            "test_seconds_per_sample": test_infer.get("seconds_per_sample"),
+            "test_samples_per_second": test_infer.get("samples_per_second"),
+        }
 
         class_names = ["Class_0", "Class_1"]
         # 打印详细指标
@@ -724,6 +804,28 @@ class Stage2Trainer:
             f.write(f"context_method: {self.cfg['context']['method']}\n")
             f.write(f"context_policy: {self.cfg['context']['context_policy']}\n")
             f.write(f"window_size: {self.cfg['context']['window_size']}\n")
+            efficiency = final_metrics.get("efficiency", {})
+            inference_splits = final_metrics.get("inference_profile", {}).get("splits", {})
+            f.write("\nEfficiency:\n")
+            f.write(f"params_total: {efficiency.get('params_total')}\n")
+            f.write(f"params_trainable: {efficiency.get('params_trainable')}\n")
+            f.write(f"params_non_trainable: {efficiency.get('params_non_trainable')}\n")
+            f.write(f"estimated_fp32_size_mb: {efficiency.get('estimated_fp32_size_mb')}\n")
+            f.write(f"training_time_seconds: {efficiency.get('training_time_seconds')}\n")
+            f.write(f"epochs_completed: {efficiency.get('epochs_completed')}\n")
+            f.write(f"avg_seconds_per_epoch: {efficiency.get('avg_seconds_per_epoch')}\n")
+            f.write(f"inference_time_seconds_test: {efficiency.get('inference_time_seconds_test')}\n")
+            f.write(f"test_seconds_per_sample: {efficiency.get('test_seconds_per_sample')}\n")
+            f.write(f"test_samples_per_second: {efficiency.get('test_samples_per_second')}\n")
+            for split in ["train", "val", "test"]:
+                split_profile = inference_splits.get(split, {})
+                f.write(
+                    f"inference_{split}: "
+                    f"seconds={split_profile.get('inference_time_seconds')}, "
+                    f"samples={split_profile.get('num_samples')}, "
+                    f"seconds_per_sample={split_profile.get('seconds_per_sample')}, "
+                    f"samples_per_second={split_profile.get('samples_per_second')}\n"
+                )
             f.write("\nFinal metrics:\n")
 
             for split in ["train", "val", "test"]:

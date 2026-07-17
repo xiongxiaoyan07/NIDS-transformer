@@ -104,6 +104,8 @@ def parse_args() -> argparse.Namespace:
             "source_dest_attention",
             "dual_host_attention",
             "lstm",
+            "gru",
+            "cnn_lstm",
             "transformer",
             "residual_transformer",
         ],
@@ -383,14 +385,14 @@ def build_datasets(
     context_indices: List[np.ndarray],
     cfg: Dict[str, Any],
 ) -> Dict[str, Stage2Dataset]:
-    source_col = cfg["data"].get("source_col", "source_id")
-    destination_col = cfg["data"].get("destination_col", "destination_id")
-    train_meta = meta_df.copy()
-    train_meta["split"] = "train"
-    print("*********train_meta************",train_meta.shape)
+    # source_col = cfg["data"].get("source_col", "source_id")
+    # destination_col = cfg["data"].get("destination_col", "destination_id")
+    # train_meta = meta_df.copy()
+    # train_meta["split"] = "train"
+    # print("*********train_meta************",train_meta.shape)
     return {
         "train": Stage2Dataset(
-            meta_df_sorted=train_meta,
+            meta_df_sorted=meta_df,
             z_sorted=z_sorted,
             context_indices=context_indices,
             target_split="train"
@@ -520,7 +522,6 @@ def print_context_diagnostics(meta_df, context_indices, include_target=True):
     )
 if __name__ == "__main__":
     main()
-
 
 
 

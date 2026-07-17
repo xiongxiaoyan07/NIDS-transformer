@@ -188,6 +188,16 @@ def parse_args() -> argparse.Namespace:
         help="Seed for selecting which val/test rows are leaked into train.",
     )
     parser.add_argument(
+        "--leak_eval_selection",
+        default="random",
+        choices=["random", "first", "last"],
+        help=(
+            "How to choose leaked val/test rows: random uses leak_eval_seed; "
+            "first takes the earliest rows in sorted Stage2 order; "
+            "last takes the latest rows."
+        ),
+    )
+    parser.add_argument(
         "--clean_context",
         action="store_true",
         help="Use the normal ContextIndexBuilder and only apply target-row leakage.",
@@ -223,9 +233,25 @@ def apply_cli_overrides(cfg: Dict[str, Any], args: argparse.Namespace) -> Dict[s
         "train_target_leakage": bool(args.leak_train_on_eval),
         "leak_eval_fraction": float(args.leak_eval_fraction),
         "leak_eval_seed": args.leak_eval_seed,
+        "leak_eval_selection": args.leak_eval_selection,
         "clean_context": bool(args.clean_context),
     }
     return cfg
+
+
+def select_leaked_rows(
+    rows: np.ndarray,
+    n_leak: int,
+    selection: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    if selection == "random":
+        return rng.choice(rows, size=n_leak, replace=False)
+    if selection == "first":
+        return rows[:n_leak]
+    if selection == "last":
+        return rows[-n_leak:]
+    raise ValueError(f"Unknown leak_eval_selection: {selection}")
 
 
 def build_datasets(
@@ -236,6 +262,7 @@ def build_datasets(
     leak_train_on_eval: bool,
     leak_eval_fraction: float,
     leak_eval_seed: int,
+    leak_eval_selection: str,
 ) -> Dict[str, Stage2Dataset]:
     source_col = cfg["data"].get("source_col", "source_id")
     destination_col = cfg["data"].get("destination_col", "destination_id")
@@ -254,13 +281,19 @@ def build_datasets(
             n_leak = int(round(len(rows) * leak_eval_fraction))
             if n_leak <= 0:
                 continue
-            leaked_rows = rng.choice(rows, size=n_leak, replace=False)
+            leaked_rows = select_leaked_rows(
+                rows=rows,
+                n_leak=n_leak,
+                selection=leak_eval_selection,
+                rng=rng,
+            )
             train_meta.loc[leaked_rows, "split"] = "train"
             leaked_counts[split] = int(n_leak)
 
         print(
             "[LEAKY] Training target rows include original train plus sampled eval rows: "
-            f"fraction={leak_eval_fraction:.3f}, leaked_counts={leaked_counts}"
+            f"fraction={leak_eval_fraction:.3f}, selection={leak_eval_selection}, "
+            f"leaked_counts={leaked_counts}"
         )
 
     return {
@@ -269,24 +302,18 @@ def build_datasets(
             z_sorted=z_sorted,
             context_indices=context_indices,
             target_split="train",
-            source_col=source_col,
-            destination_col=destination_col,
         ),
         "val": Stage2Dataset(
             meta_df_sorted=meta_df,
             z_sorted=z_sorted,
             context_indices=context_indices,
             target_split="val",
-            source_col=source_col,
-            destination_col=destination_col,
         ),
         "test": Stage2Dataset(
             meta_df_sorted=meta_df,
             z_sorted=z_sorted,
             context_indices=context_indices,
             target_split="test",
-            source_col=source_col,
-            destination_col=destination_col,
         ),
     }
 
@@ -333,6 +360,7 @@ def main() -> None:
         leak_train_on_eval=bool(args.leak_train_on_eval),
         leak_eval_fraction=float(args.leak_eval_fraction),
         leak_eval_seed=int(args.leak_eval_seed if args.leak_eval_seed is not None else cfg.get("seed", 42)),
+        leak_eval_selection=str(args.leak_eval_selection),
     )
 
     input_dim = int(z_sorted.shape[1])
