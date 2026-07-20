@@ -387,12 +387,12 @@ def build_datasets(
 ) -> Dict[str, Stage2Dataset]:
     # source_col = cfg["data"].get("source_col", "source_id")
     # destination_col = cfg["data"].get("destination_col", "destination_id")
-    # train_meta = meta_df.copy()
-    # train_meta["split"] = "train"
-    # print("*********train_meta************",train_meta.shape)
+    train_meta = meta_df.copy()
+    train_meta["split"] = "train"
+    print("*********train_meta************",train_meta.shape)
     return {
         "train": Stage2Dataset(
-            meta_df_sorted=meta_df,
+            meta_df_sorted=train_meta,
             z_sorted=z_sorted,
             context_indices=context_indices,
             target_split="train"
