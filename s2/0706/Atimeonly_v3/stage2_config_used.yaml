@@ -1,0 +1,61 @@
+seed: 130
+data:
+  stage1_dir: /content/drive/MyDrive/s1/0704/0704C_ar002_et12_20260511_001
+  embedding_files:
+    train: stage1_train_embeddings.npz
+    val: stage1_val_embeddings.npz
+    test: stage1_test_embeddings.npz
+  metadata_csv: stage1_flow_metadata.csv
+  timestamp_col: flow_start_timestamp_us
+  source_col: source_id
+  destination_col: destination_id
+context:
+  method: time_only
+  window_size: 128
+  include_target: true
+  context_policy: online
+  endpoint_mode: same_endpoint
+  deduplicate: true
+model:
+  d_model: null
+  nhead: 4
+  num_layers: 1
+  dim_feedforward: 256
+  dropout: 0.25
+  num_classes: 2
+  pooling: last
+  use_positional_encoding: true
+  position_mode: age
+  max_len: 512
+  model_type: transformer
+  cls_head: 1
+  lstm_hidden_dim: 256
+  lstm_num_layers: 2
+  lstm_bidirectional: false
+training:
+  epochs: 150
+  batch_size: 128
+  lr: 0.00001
+  weight_decay: 0.00003
+  num_workers: 2
+  patience: 12
+  metric_for_best: pr_auc
+  select_threshold_each_epoch: true
+  use_weighted_sampler: false
+  sampler_pos_fraction: 0.1
+  class_weighted_loss: false
+  loss_type: focal
+  alpha:
+  - 1.0
+  - 1.05
+  focal_gamma: 1.0
+  label_smoothing: 0.02
+  grad_clip_norm: 0.5
+  threshold: 0.5
+  device: auto
+  auto_threshold: true
+  threshold_metric: f1_label1
+  threshold_min: 0.01
+  threshold_max: 0.99
+  threshold_steps: 199
+  min_delta: 0.0001

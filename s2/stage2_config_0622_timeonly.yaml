@@ -1,0 +1,81 @@
+seed: 42
+data:
+  stage1_dir: None
+  embedding_files:
+    train: stage1_train_embeddings.npz
+    val: stage1_val_embeddings.npz
+    test: stage1_test_embeddings.npz
+  metadata_csv: stage1_flow_metadata.csv
+  timestamp_col: flow_start_timestamp_us
+  source_col: source_id
+  destination_col: destination_id
+context:
+  # time_only / source_host / destination_host / endpoint
+  method: time_only
+  window_size: 128
+  include_target: true
+  # online:
+  #   context can use any earlier flow in global chronological order.
+  # split_isolated:
+  #   context only uses earlier flows from the same split.
+  # train_only_for_eval:
+  #   train target uses earlier train flows;
+  #   val/test target uses earlier train flows only
+  context_policy: split_isolated
+  # endpoint options:
+  #   same_endpoint: previous flows touching either current endpoint.
+  #   same_source_or_dest: previous flows with same source OR same destination only.
+  endpoint_mode: same_endpoint
+  deduplicate: true
+model:
+  # model_type:
+  #   no_context_mlp
+  #   lstm
+  #   transformer
+  model_type: transformer
+  # None means use Stage1 z dimension directly.
+  d_model: null
+  # Transformer parameters
+  nhead: 8
+  num_layers: 2
+  dim_feedforward: 512
+  dropout: 0.3
+  num_classes: 2
+  # last / mean / attention
+  pooling: last
+  use_positional_encoding: false
+  max_len: 512
+  #  cls_head - 1/2/3 how many  nn.Linear layers
+  cls_head: 1
+
+  # LSTM parameters
+  "lstm_hidden_dim": 256
+  "lstm_num_layers": 2
+  "lstm_bidirectional": false
+
+training:
+  epochs: 500
+  batch_size: 128
+  lr: 0.0003
+  weight_decay: 0.0001
+  num_workers: 2
+  patience: 20
+  metric_for_best: f1_label1
+  use_weighted_sampler: false
+  # loss
+  loss_type: focal # ce / focal
+  class_weighted_loss: true
+  focal_gamma: 2.0
+  label_smoothing: 0.02
+
+  grad_clip_norm: 1.0
+  # threshold
+  threshold: 0.5
+  auto_threshold: true
+  threshold_metric: macro_f1  # f1 / recall / precision
+  threshold_min: 0.01
+  threshold_max: 0.99
+  threshold_steps: 199
+
+  device: auto
+  min_delta: 0.0005   #0.0001
