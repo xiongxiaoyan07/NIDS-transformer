@@ -1,0 +1,153 @@
+上面是我的stage1的time-aware transformer。仔细阅读第一阶段的代码。现在我想实现stage2的代码。详细解析stage2应该如何做？
+stage2中inter-flow context 的定义为两种：做一个 ablation：time-only window vs host-aware window（host-aware:方式 A：source-host context ；方式 B：destination-host context ；方式 C：endpoint-aware context ）。请给我提供模块化的代码，可配置等。 
+请结合我阶段一的代码，给我实现阶段二的代码。
+
+
+上传的代码是我的stage1的time-aware transformer已经实现的代码。仔细阅读第一阶段的代码。现在我想实现stage2的代码。详细解析stage2应该如何做？ 
+stage2中inter-flow context 的定义为两种：做一个 ablation：time-only window vs host-aware window（host-aware:方式 A：source-host context ；方式 B：destination-host context ；方式 C：endpoint-aware context ）。请给我提供模块化的代码，可配置等。 
+推荐划分方式 B：Chronological split。。如果我第一阶段没有这样划分，请帮我修正第一阶段的代码。 
+
+最后，请结合我阶段一的代码，给我实现阶段二的代码。（代码编写是要注意代码的执行效率，优化代码，代码带有详细的注释）
+
+
+
+
+
+
+
+
+
+
+inter-flow context 的定义还不够具体
+
+你现在用了 context window：𝐶𝑖={Xi−K,...,Xi,...,Xi+K}这个形式没问题，但实际实现时必须回答一个关键问题：什么叫 neighboring flows？
+
+可能的定义包括：
+
+按时间顺序相邻；
+
+同一 src IP / dst IP；
+
+同一 5-tuple 附近；
+
+同一 host 在时间窗口内的 flows；
+
+同一 alert/session/campaign；
+
+根据 graph relation 选取 neighbors。
+
+如果只是用 dataset 中排序相邻的 flows，可能会被质疑上下文不是真正语义相关。建议你后续把 inter-flow context 明确成：
+
+flows sharing source host, destination host, or occurring within a fixed temporal window around the target flow.
+
+然后做一个 ablation：time-only window vs host-aware window。这样 Stage II 的合理性会强很多。
+4. Host-aware window：按主机关系组织 flows
+核心定义
+
+host-aware window 的原则是：
+对于目标 flow 𝐹𝑖，只选择和它共享主机关系、并且时间上接近的 flows 作为上下文。
+
+一个 flow 通常可以表示为：
+
+𝐹𝑖=(srci,dsti,sporti,dporti,protoi,ti)
+
+host-aware 的关键是用 srci 和 dsti来判断相关性。
+
+最简单的定义是：
+
+𝐶𝑖 host={Fj∣srcj=srci∨dstj=dsti∨srcj=dsti∨dstj=srci,∣tj−ti∣≤ΔT}
+
+意思是：选择在时间窗口 ΔT 内，并且和目标 flow 共享源主机或目的主机的 flows。
+
+5. Host-aware 可以有几种组织方式
+方式 A：source-host context
+
+只看同一个源主机发出的 flows：
+
+𝐶𝑖 src={Fj∣srcj=srci,∣tj−ti∣≤ΔT}
+
+这适合检测：
+
+port scanning；
+
+brute force；
+
+bot 主机横向移动；
+
+infected host 向多个目标发起连接；
+
+one-to-many attack pattern。
+
+例如：
+
+Flow	src	dst	behavior
+
+𝐹1   10.0.0.9	10.0.0.1	connect port 22
+
+𝐹2   10.0.0.9	10.0.0.2	connect port 22
+
+𝐹3   10.0.0.9	10.0.0.3	connect port 22
+
+𝐹4   10.0.0.9	10.0.0.4	connect port 22
+
+如果目标 flow 是 𝐹3，source-host context 会把 𝐹1,F2,F4	都纳入上下文。这样模型可以看到：这个 src host 正在短时间内访问多个目标的同一类服务，这对 scan / brute force 很有价值。
+
+方式 B：destination-host context
+
+只看同一个目标主机接收到的 flows：
+
+𝐶𝑖 dst={Fj∣dstj=dsti,∣tj−ti∣≤ΔT}
+
+这适合检测：
+
+DDoS；
+
+distributed scan；
+
+many-to-one brute force；
+
+victim-centered attack pattern。
+
+例如：
+
+Flow	src	dst      behavior
+
+𝐹1      10.0.0.1  	10.0.0.100 	SYN
+
+𝐹2      10.0.0.2	   10.0.0.100 	SYN
+
+𝐹3      10.0.0.3  	10.0.0.100 	SYN
+
+𝐹4      10.0.0.4 	10.0.0.100 	SYN
+
+如果目标 flow 是 𝐹3，destination-host context 会让模型看到：同一个 victim host 正在短时间内被多个 sources 访问。这对 DDoS 或 distributed brute force 很重要。
+
+方式 C：endpoint-aware context
+
+同时考虑源主机和目标主机：
+
+𝐶𝑖 endpoint={Fj∣srcj∈{srci,dsti}∨dstj∈{srci,dsti},∣tj−ti∣≤ΔT}
+
+这个定义更宽松。只要 flow 和目标 flow 的任一 endpoint 有交集，就放进上下文。
+
+例如目标 flow 是：
+
+𝐹𝑖:A→B
+
+那么下面这些都可以作为 context：
+A→C
+D→A
+B→E
+F→B
+
+这样可以捕捉目标 flow 周围两个主机的通信行为。它适合 multi-stage attack，比如：
+
+attacker 扫描 victim；
+
+victim 建立异常 outbound connection；
+
+attacker 继续尝试 exploit；
+
+victim 与 C2 server 通信。
+
+这种情况下，只看单个 source 或单个 destination 可能不够，endpoint-aware 更灵活。

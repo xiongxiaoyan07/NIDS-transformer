@@ -1,0 +1,97 @@
+S1 ABC三种方案
+方案A运行结果："test_metrics": {
+    "accuracy": 0.9817283253318272,
+    "macro_precision": 0.891903312957051,
+    "macro_recall": 0.8600128012451596,
+    "macro_f1": 0.8752142703953976,
+    "weighted_precision": 0.9810772212036308,
+    "weighted_recall": 0.9817283253318272,
+    "weighted_f1": 0.9813408831023472,
+    "precision_label1": 0.7950310559006211,
+    "recall_label1": 0.7277896233120114,
+    "f1_label1": 0.759925788497217,
+    "auc": 0.9800628507610464,
+    "pr_auc": 0.8326108220868012,
+    "per_class_f1": {
+      "0": 0.990502752293578,
+      "1": 0.759925788497217
+    },
+    "confusion_matrix": [
+      [
+        33739,
+        264
+      ],
+      [
+        383,
+        1024
+      ]
+    ],
+    "num_classes": 2,
+    "num_samples": 35410,
+    "loss": 0.11201799211734469,
+    "threshold": 0.7150000000000005
+  }
+方案B运行结果：Full metrics: {'accuracy': 0.9829991527817001, 'macro_precision': 0.8895604171389182, 'macro_recall': 0.8869054386082953, 'macro_f1': 0.8882279230430299, 'weighted_precision': 0.9829418565248673, 'weighted_recall': 0.9829991527817001, 'weighted_f1': 0.9829700872018255, 'precision_label1': 0.788117394416607, 'recall_label1': 0.7825159914712153, 'f1_label1': 0.7853067047075606, 'auc': 0.9859677814706804, 'pr_auc': 0.8564023558456322, 'per_class_f1': {'0': 0.9911491413784992, '1': 0.7853067047075606}, 'confusion_matrix': [[33707, 296], [306, 1101]], 'num_classes': 2, 'num_samples': 35410, 'loss': 0.05759464621893551, 'threshold': 0.4550000000000003}
+
+方案C运行结果："test_metrics": {
+    "accuracy": 0.9841852417634511,
+    "macro_precision": 0.8990265209974933,
+    "macro_recall": 0.8919523147078002,
+    "macro_f1": 0.8954546222507791,
+    "weighted_precision": 0.9832784957495156,
+    "weighted_recall": 0.9834202417634511,
+    "weighted_f1": 0.9833463190159758,
+    "precision_label1": 0.8066624544138929,
+    "recall_label1": 0.7917564545454545,
+    "f1_label1": 0.7991395232974911,
+    "auc": 0.9890371580790593,
+    "pr_auc": 0.8762558340285889,
+    "per_class_f1": {
+      "0": 0.9913527212040671,
+      "1": 0.7994265232974911
+    },
+    "confusion_matrix": [
+      [33736,   267],
+      [  293,  1114]
+    ],
+    "num_classes": 2,
+    "num_samples": 35410,
+    "loss": 0.06821018314045486,
+    "threshold": 0.6840000000000005
+  }
+不同配置下的运行结果。详细解析结果（主要关注macro_f1、macro_recall、macro_precision、pr_auc、auc、confusion_matrix和FPR这些metrics，并从这些数据进行分析）
+
+
+C
+"test_metrics": {
+    "accuracy": 0.9834202417634511,
+    "macro_precision": 0.8989505209974933,
+    "macro_recall": 0.8918983147078002,
+    "macro_f1": 0.8953896222507791,
+    "weighted_precision": 0.9832784957495156,
+    "weighted_recall": 0.9834202417634511,
+    "weighted_f1": 0.9833463190159758,
+    "precision_label1": 0.8069464544138929,
+    "recall_label1": 0.7920454545454545,
+    "f1_label1": 0.7994265232974911,
+    "auc": 0.9890371580790593,
+    "pr_auc": 0.8762558340285889,
+    "per_class_f1": {
+      "0": 0.9913527212040671,
+      "1": 0.7994265232974911
+    },
+    "confusion_matrix": [
+      [
+        80193,
+        667
+      ],
+      [
+        732,
+        2788
+      ]
+    ],
+    "num_classes": 2,
+    "num_samples": 84380,
+    "loss": 0.06821018314045486,
+    "threshold": 0.6840000000000005
+  }

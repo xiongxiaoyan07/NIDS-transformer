@@ -1,0 +1,16 @@
+我想做NIDS，我现在有PCAP文件。我可以通过suricata从PCAP文件中抽取出packet和flow的相关信息并给我每个packet和flow添加label（也是有由suricata产生的-pseudo-label），将这个pcap文件生成相应的json文件。我知道一个flow中会包含多个packets并且这些packet是有强时间顺序的，因此我想用transformer来获取多个packet之间的上下文信息，但在网络流量里，更重要的不一定是“第几个包”，而是“它与之前包隔了多久”。因此，我想把位置编码改造成时间+位置编码（time encoding），最终我可以生成每个flow(包含多个packets)带有上下文的embedding。网络攻击有很多类型，DDoS, port scan, SQL injection等，要想检测这些攻击除了要考虑packets之间的关系（这个可以通过Transformer处理一个flow中的packets来拿到上下文信息），还需要考虑flows之间的关系,真实攻击的证据往往分散在多 flows、hosts、minutes-to-days 的上下文中。 
+我要做的是：
+1、获取PCAP文件，然后按照5-tuple双向流将flow和packet关联好并生成json文件，将一个flow中的所有packets作为一个sequence送入到transformer（每个packet作为一个token，每个packet中包含packet header中的详细信息，Besides packet fields, we also extract various metadata fields from the network data. Specifically, we extract contextual and statistical information at packet- and flow-level, such as direction (outbound vs. inbound), number of bytes per flow, number of packets per flow, start time of a flow, inter-arrival time, duration, etc.，如以及packet time信息等。特别注意我不取payload，因为现在payload都是加密的，用处不大而且由于他很大可能造成时间消耗，但是在后续的研究中可以随时加入，coarser granularities和finest granularities信息。多模态(异构特征融合)：既有包头字段，也有时间、方向、统计量等信息. 包头是结构化、长度固定、字段功能明确的数据，没有明显“空间局部结构”。这些信息通过record projection直接生成vector，这样 transformer 的自注意力可以直接学习包上下文之间的依赖）。对整条 packet record 一次性编码。做法是：categorical 字段先 one-hot与 numerical 字段拼起来对整条record做 Record Level Projection也就是“把每个 packet record 压成一个 token vector”。 
+考虑到序列长度重尾分布：大多数短，少数特别长，直接全吃进去会很贵。这里可能设置一个最大值，超过这个值之后，就截取（对长度不超过L 的 flow 全保留；对超长 flow，先做前L 截断，后续再比较 head-only、head-tail、sampling 三种策略。---鉴于大多数现有工作在超长 flow 上采用截断策略，且攻击相关信息往往在会话早期已经显现，本研究将首先采用前 L 截断作为主方案，并进一步比较 head-only、head-tail 和 sampling 三种长序列处理策略。）。
+在网络流量里，更重要的不一定是“第几个包”，而是“它与之前包隔了多久”。因此，我想把位置编码改造成同时保留顺序和时间的编码。time-aware transformer。原有 Transformer encoder 上，把位置编码改成了包含顺序和时间的编码（这套设计不是“只用时间”，而是把：离散顺序、真实时间信息，合在一起，形成一个新的编码基底。先做 timestamp smoothing，再做 time encoding）。普通 Transformer 的 positional encoding 只表达“第几个元素”，而网络会话里真正有意义的不只是顺序，还有时间间隔。所以把每个 packet 的 time feature 融入编码。（这个time-aware 是参考Network intrusion detection based on n-gram frequency and time-aware transformer这篇文章）
+经过第一个 Transformer 后，你得到的不只是 packet 表示，而是一个 context-aware flow embedding。一个 flow 不再只是一些统计量，而是一个融合了 packet 顺序、时间间隔、方向切换、头字段交互、局部上下文的表示向量。这个 embedding 可以通过以下方式得到：[CLS] token、mean pooling、attention pooling。建议你实验比较上面三个取值，因为网络序列里不一定像 NLP 那样 [CLS] 最优。
+2、第一步的transformer产生的flow embedding送入到下一个阶段的transformer。
+我们只都attacks involving multiple flows. Many attacks, such as coordinated scanning, distributed denial-of-service, and multi-stage intrusions, manifest across multiple related flows rather than inside a single flow.把 flow 放回其更大的上下文中理解。（FlowTransformer: A Transformer Framework for Flow-based Network Intrusion Detection Systems参考的这篇文章）
+第二阶段把第一阶段的flow的embeddings作为输入序列，并送入第二阶段的ransformer，以建模多flows上下文。
+第二个transformer会获得新的含有上下文的flow embedding，最后加上一个分类层，对每个flow进行分类（benign or malicious flow）。注意，一定是对每个flow分类。为了处理数据不平衡，考虑使用focal loss function、或者SMOTE等技术来处理数据不平衡
+按全局时间排序：第一版能跑，但语义较弱，不是最优
+第二版：按 source host 构造序列.对每个源主机，把它发起的 flow 按时间排序。
+
+上面是我先尊重网络数据本身的结构，再建模
+《Network intrusion detection based on n-gram frequency and time-aware transformer》《FlowTransformer: A Transformer Framework for Flow-based Network Intrusion Detection Systems》《DoLLM: How Large Language Models Understanding Network Flow Data to Detect Carpet Bombing DDoS》我在看了很多文章，这是其中重要的三篇。我的idea就是从这些文章中所得的。
+这是我的想法，请详细梳理我的想法

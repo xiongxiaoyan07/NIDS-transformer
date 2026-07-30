@@ -1,0 +1,188 @@
+五、论文需要的核心实验矩阵
+Experiment A：flow-level reference
+
+目的是回答：
+
+传统 flow statistics 本身能达到什么性能？
+
+运行：
+
+Random Forest；
+
+XGBoost；
+
+LightGBM；
+
+Flow MLP。
+
+输入只能是 flow CSV 统计特征，不使用 packet sequence。
+
+注意：当前 MLP_with_flow 只有在 has_flow_feats=True 时加入；传统 ML 的数据提取也可能随着 fusion 配置改变。建议为 flow-only baseline 创建独立 loader，始终从 flow CSV 获取特征，不要依赖 packet model 当前是否启用了 flow fusion。
+
+comparison
+
+Experiment B：packet sequence baselines
+
+全部使用相同 packet feature、相同 split、相同 L：
+
+Packet MLP + masked mean pooling；
+
+LSTM；
+
+GRU；
+
+BiLSTM；
+
+CNN1D；
+
+Standard Transformer；
+
+Ours BothEncoding。
+
+当前 FlowLevelMLP 在没有 flow features 时已经支持对 packet token 做 masked mean，但比较脚本中相应模型被注释。建议增加：
+
+self.models["PacketMeanMLP"] = FlowLevelMLP(
+    input_dim=self.input_dim,
+    hidden_dims=[256, 128, 64],
+    dropout=0.3,
+    num_classes=self.num_classes,
+)
+
+这很重要，因为它能回答：
+
+提升来自 packet-level 原始特征，还是来自 Transformer sequence modeling？
+
+Experiment C：核心 temporal ablation
+
+这是 Stage 1 最重要的论文表。
+
+模型	Position	IAT	含义
+Ours_NoEncoding	否	否	packet content only
+Ours_PositionOnly	是	否	packet order
+Ours_TimeOnly	否	是	continuous timing
+Ours_BothEncoding	是	是	完整模型
+
+你的 comparison.py 已经构造了前三个消融，主脚本额外添加 BothEncoding。
+
+comparison
+
+ 
+
+comparison
+
+这里必须满足：
+
+不使用 flow features；
+
+packet input 中不包含 IAT；
+
+四个模型除了 encoding flags 外完全一致；
+
+相同初始化 seed；
+
+相同训练 split；
+
+相同 sampler 和训练预算。
+
+Experiment D：序列长度
+
+固定最佳模型和 head：
+
+L = 16, 32, 64, 128
+
+是否加入 256 应由 sequence length 分布和 GPU 成本决定。
+
+报告：
+
+完整 flow 覆盖率；
+
+截断 flow 比例；
+
+attack class F1；
+
+Macro-F1；
+
+PR-AUC；
+
+显存；
+
+inference latency。
+
+不要只报告最大性能，还要解释性能与计算成本的折中。
+
+Experiment E：截断策略
+
+固定最佳 L：
+
+head
+head_tail
+random
+
+random 需要固定 sampling seed，否则不同模型看到的 packet 子集不同。
+
+建议将 random 策略重复三次，或至少固定一个独立的 sampling_seed。
+
+Experiment F：loss
+
+固定模型、数据和 sequence：
+
+Loss	Sampler	Alpha
+CE	none	none
+weighted CE	none	balanced
+focal	none	none
+focal	none	mild/balanced，可选
+
+不要把 WeightedRandomSampler 同时加入主 loss 对比。
+
+YAML 要显式写：
+
+training:
+  loss: ce
+
+或：
+
+training:
+  loss: focal
+
+否则代码会默认 focal，但运行配置本身不能清晰证明采用了哪一种。
+
+losses
+
+Experiment G：flow fusion
+
+固定最佳 packet model：
+
+Packet only
+Packet + flow gated fusion
+Flow only
+
+这三组能回答：
+
+packet sequence 是否比 flow features 更好；
+
+两种表示是否互补；
+
+融合提升是否值得额外复杂度。
+
+Experiment H：外部测试
+
+如果有独立 PCAP，运行：
+
+train/validation：内部训练 PCAP
+test：完全独立 PCAP
+
+run_stage1.py 已支持外部 packet 和 flow CSV。
+
+run_stage1
+
+外部测试中：
+
+preprocessing 只能 fit 在训练数据；
+
+threshold 只能由内部 validation 选择；
+
+external test 不得参与调参；
+
+必须明确是否使用相同 Suricata ruleset；
+
+最好报告 in-domain 与 cross-domain 两组结果。

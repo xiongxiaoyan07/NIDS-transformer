@@ -1,0 +1,32 @@
+Boer, Pieter-Tjerk de (UT-EEMCS) <p.t.deboer@utwente.nl>
+Bayhan, Suzan (UT-EEMCS) <suzan.bayhan@utwente.nl>
+Sommese, Raffaele (UT-EEMCS) <r.sommese@utwente.nl>
+Affinito, Antonia (UT-EEMCS) <a.affinito@utwente.nl>
+
+Hi Xiaoyan,
+Wendie Kliverik and Saskia Groenedijk are the internship coordinators at our Faculty, and they help with contract matters. 
+Marloes will then clarify these things as well.
+
+The topic looks fine and is certainly good to be addressed in an MSc project.
+As possible supervisors, you may ask:
+•	Nadir Bouali (DMB group)
+•	Maurice van Keulen (DMB group)
+•	Duc Le (PS group)
+•	Faizan Ahmed (FMT group)
+
+They are from research groups associated with the Data Science and Technology specialization. After confirming with one of them that they can supervise your project, my advise would be to have a 2nd examiner from the DACS group (for example, Suzan Bayan or Peter-Tjerk de Boer) that work on computer networks and that might provide a complementary network expertise.
+
+Regards,
+Nicola 
+上面的邮件使我的mentor给我的信息。
+我现在已经有supervisor是Duc Le (PS group)。
+我现在要找2nd examiner from the DACS group：Boer, Pieter-Tjerk de (UT-EEMCS) <p.t.deboer@utwente.nl>
+Bayhan, Suzan (UT-EEMCS) <suzan.bayhan@utwente.nl>
+Sommese, Raffaele (UT-EEMCS) <r.sommese@utwente.nl>
+Affinito, Antonia (UT-EEMCS) <a.affinito@utwente.nl>
+
+介绍一下我自己，我是一名来在EIT-Data science的master的学生。我现在在外部一家公司在实习，公司在学校附近，叫做bright access。Master Thesis Project.docx文件是公司给我的项目相关信息。Research_Proposal.pdf我的research proposal。
+我的计划是8月初或者8月中旬答辩。
+结合我上面的所有信息，我该如何给DACS group里面的四个教授发邮件，委婉的拜托他们当我的2nd examiner. 
+我应该如何给每个教授写邮件？并最好询问他们的休假计划，好安排论文审阅的时间。
+请给我提供分别发送给四个教授的邮件。

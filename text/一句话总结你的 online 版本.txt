@@ -1,0 +1,3 @@
+一句话总结你的 online 版本：
+
+第一阶段负责把 packet sequence 编成 flow embedding，第二阶段不处理全局所有 flow，而是围绕每个目标 flow，从实时缓存里检索最相关的历史 flows，构造成一个因果局部上下文序列，再输出该目标 flow 的最终分类。

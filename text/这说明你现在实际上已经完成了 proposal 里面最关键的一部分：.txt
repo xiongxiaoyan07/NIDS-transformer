@@ -1,0 +1,423 @@
+这说明你现在实际上已经完成了 proposal 里面最关键的一部分：
+**Stage-I（time-aware intra-flow modeling）已经不是概念，而是真正实现了。**
+
+你当前的pipeline本质上已经是：
+
+```text
+Packet Sequence
+      ↓
+Packet Embedding
+      ↓
+Time-aware Transformer
+      ↓
+Packet-level Representation
+      ↓
+Pooling
+      ↓
+Flow Embedding
+      ↓
+Concat(flow statistical features)
+      ↓
+Stage-I Embedding
+      ↓
+Stage-II Transformer
+      ↓
+Classification
+```
+
+这和你 proposal 中的结构已经非常接近，但现在你已经从“理论设计”进入到了：
+
+> hierarchical hybrid representation learning
+
+而且你现在这个设计其实比 proposal 原版更合理。
+
+---
+
+# 你现在这个设计的优点
+
+你现在做的是：
+
+```text
+time-aware packet representation
++
+flow statistical feature fusion
+```
+
+而不是：
+
+```text
+只依赖 packet transformer
+```
+
+这是非常重要的。
+
+因为：
+
+* packet sequence 擅长：
+
+  * timing pattern
+  * burst behavior
+  * direction switching
+  * fine-grained interaction
+
+* flow statistical features 擅长：
+
+  * global traffic distribution
+  * duration
+  * byte count
+  * packet count
+  * average behavior
+
+二者其实是互补的。
+
+这意味着：
+
+你的 Stage-I 已经不再只是：
+
+> packet encoder
+
+而是：
+
+> hybrid packet-flow representation encoder
+
+这是一个更强的表述。
+
+---
+
+# 你现在的真正创新点
+
+你 proposal 原来最大的风险之一是：
+
+> “packet-level modeling may not outperform strong flow-level baselines”
+
+【14†source】
+
+但你现在实际上已经绕开了这个问题。
+
+因为你不是：
+
+```text
+packet 替代 flow
+```
+
+而是：
+
+```text
+packet + flow fusion
+```
+
+这会让 reviewer 更容易接受。
+
+因为现实中：
+
+* flow features 确实有效
+* packet sequence 提供额外时序信息
+* 二者融合通常比单独一种更稳定
+
+所以你现在的核心创新应该重新定义为：
+
+---
+
+# 你现在的真正研究贡献（建议）
+
+你应该把 contribution 改成：
+
+### 1. Time-aware packet sequence modeling
+
+利用 packet-level temporal dynamics。
+
+### 2. Hybrid packet-flow representation fusion
+
+融合 packet sequence representation 与 flow statistical features。
+
+### 3. Hierarchical cross-flow contextual reasoning
+
+利用 Stage-II 建模跨 flow dependency。
+
+---
+
+# 你现在最关键的问题
+
+其实已经不是：
+
+> “能不能work”
+
+而是：
+
+# Stage-II 到底怎么组织输入？
+
+因为这是整个论文真正的核心。
+
+---
+
+# 你现在需要明确的 Stage-II 设计
+
+你现在的 Stage-I 输出：
+
+```text
+z_i ∈ R^d
+```
+
+然后：
+
+```text
+[z_{i-k}, ..., z_i, ..., z_{i+k}]
+```
+
+输入 Stage-II transformer。
+
+这里有几个关键设计问题。
+
+---
+
+# 1. flow context 如何构造？
+
+这是最重要的问题。
+
+你现在有几个选择：
+
+---
+
+## A. Temporal Neighbor（最简单）
+
+按时间排序：
+
+```text
+previous K flows
+current flow
+next K flows
+```
+
+优点：
+
+* 最容易实现
+* 最符合 proposal
+* sequence natural
+
+缺点：
+
+* unrelated flows 太多
+* context noise 大
+
+---
+
+## B. Same-host Context（更合理）
+
+例如：
+
+```text
+same src IP
+same dst IP
+same session
+```
+
+构造 context。
+
+这其实更像：
+
+> communication context transformer
+
+优点：
+
+* security semantic 更强
+* 更符合 attack propagation
+
+缺点：
+
+* preprocessing 更复杂
+
+---
+
+## C. Graph-inspired Context（最强）
+
+Stage-II 输入不是简单 sequence：
+
+而是：
+
+```text
+host interaction neighborhood
+```
+
+例如：
+
+* same src
+* same dst
+* same subnet
+* temporal adjacency
+
+这种已经接近：
+
+> graph transformer
+
+这个会很强，但复杂度会上升很多。
+
+---
+
+# 我建议你现在先做：
+
+# Temporal + Same-host Hybrid
+
+例如：
+
+```text
+context = nearby flows
+filtered by shared endpoint
+```
+
+因为：
+
+纯 temporal context 很容易无意义。
+
+但完全 graph 化又太大。
+
+---
+
+# 2. Stage-II 到底学什么？
+
+这是你论文里必须说清楚的。
+
+你现在 Stage-I 已经学习：
+
+```text
+intra-flow packet dynamics
+```
+
+那么：
+
+Stage-II 学的是：
+
+# inter-flow attack coordination
+
+例如：
+
+* scan progression
+* lateral movement
+* DDoS coordination
+* distributed probing
+* multi-flow attack stages
+
+这个必须明确写出来。
+
+否则 reviewer 会问：
+
+> 为什么需要第二个 transformer？
+
+---
+
+# 3. 你现在应该开始做 ablation
+
+你 proposal 里已经设计了：
+
+```text
+without Stage-II
+with Stage-II
+```
+
+但你现在应该增加：
+
+---
+
+## Fusion Ablation
+
+### packet only
+
+```text
+packet transformer embedding
+```
+
+### flow only
+
+```text
+flow statistical features
+```
+
+### packet + flow
+
+```text
+fusion embedding
+```
+
+这是你现在最重要的实验之一。
+
+因为它能直接证明：
+
+> packet sequence 与 flow statistics 是互补的。
+
+这个结果会非常关键。
+
+---
+
+# 4. 你现在其实已经接近论文核心了
+
+你现在的研究已经从：
+
+```text
+proposal
+```
+
+进入：
+
+```text
+architecture validation
+```
+
+你接下来真正重要的是：
+
+---
+
+# 三个核心实验
+
+## 实验1：time-aware 是否有效
+
+比较：
+
+* no temporal
+* positional only
+* IAT only
+* combined
+
+这个你 proposal 已经有。
+
+---
+
+## 实验2：fusion 是否有效
+
+比较：
+
+* packet only
+* flow only
+* fusion
+
+这个你现在必须加。
+
+---
+
+## 实验3：Stage-II 是否有效
+
+比较：
+
+* no context
+* LSTM context
+* Transformer context
+
+---
+
+# 你现在论文最好的 framing
+
+你现在已经不应该再强调：
+
+> “Transformer for NIDS”
+
+这个太普通。
+
+你真正的 framing 应该是：
+
+# Hierarchical Hybrid Representation Learning for Flow-level Intrusion Detection
+
+其中：
+
+* packet sequence → local temporal behavior
+* flow statistics → global traffic behavior
+* stage-II → contextual attack dependency
+
+这会比原 proposal 更成熟。

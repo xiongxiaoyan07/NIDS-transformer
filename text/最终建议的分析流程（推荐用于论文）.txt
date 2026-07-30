@@ -1,0 +1,14 @@
+最终建议的分析流程（推荐用于论文）
+
+建议按以下顺序完成，形成一套完整的分析链路：
+
+数据集概览：Flow 数量、标签分布、协议分布、持续时间、包数和字节数等基本统计。
+Context 可获得性分析：针对 Same Source、Same Destination、Same Endpoint、Same Source OR Destination 四种 Context，在不同 K（5/10/20/30） 下统计可用 Context 数量及覆盖率。
+Context 一致性分析：分析历史 Context 与当前 Flow 的 Label Consistency，验证攻击或正常行为是否具有连续性。
+Temporal Correlation 分析：计算关键特征（如 Flow Duration、Packets、Bytes、IAT 等）与历史 Context 的相关性，验证行为连续性。
+Temporal Distance 分析：分析历史 Context 与当前 Flow 的时间间隔分布，确认 Context 的时序合理性。
+不同 Context 类型比较：综合比较四种 Context 在覆盖率、标签一致性、特征相关性等方面的表现，并据此说明为什么选择最终采用的 Context 定义。
+不同 K 值分析：分析 Context 长度增加带来的收益和噪声，为后续消融实验（不同 K）提供理论依据。
+
+这套分析能够直接回答论文中的核心问题：加入 Cross-flow Context 的性能提升是否来源于真实的时序关联，而不仅仅是更长的输入或更多参数。如果这些统计结果能够证明 Context 具有较高的覆盖率、标签一致性和特征连续性，那么后续 Transformer 模型性能提升就有了充分的数据支撑，而不仅仅是经验性的实验结果。
+

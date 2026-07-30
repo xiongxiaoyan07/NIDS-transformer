@@ -1,0 +1,40 @@
+模型	Position	Time
+NoEncoding	false	false
+PositionOnly	true	false
+TimeOnly	false	true
+BothEncoding	true	true
+我想做上面的对比。我使用了相同的配置文件，只有这两个  use_positional_encoding和use_time_encoding配置发生了变化。
+1、BothEncoding
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0625_RQ1_B/BothEncoding/stage1_config_0625_B_Both.yaml \
+  --out_dir /content/drive/MyDrive/s1/0625_RQ1_B/BothEncoding \
+  --export_embeddings
+结果：[TEST] Full metrics: {'accuracy': 0.9822931375317707, 'macro_precision': 0.893547043943498, 'macro_recall': 0.8674607832274341, 'macro_f1': 0.8800120631758005, 'weighted_precision': 0.9817680767767808, 'weighted_recall': 0.9822931375317707, 'weighted_f1': 0.9819896699939943, 'precision_label1': 0.7977099236641222, 'recall_label1': 0.7427149964463398, 'f1_label1': 0.7692307692307693, 'auc': 0.9825365967018964, 'pr_auc': 0.8369687556735264, 'per_class_f1': {'0': 0.9907933571208317, '1': 0.7692307692307693}, 'confusion_matrix': [[33738, 265], [362, 1045]], 'num_classes': 2, 'num_samples': 35410, 'loss': 0.08172580133114911, 'threshold': 0.4600000000000001}
+2、TimeOnly
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0625_RQ1_B/TimeOnlyEncoding/stage1_config_0625_B_T.yaml \
+  --out_dir /content/drive/MyDrive/s1/0625_RQ1_B/TimeOnlyEncoding \
+  --export_embeddings
+结果：[TEST] Full metrics: {'accuracy': 0.9822084157017792, 'macro_precision': 0.8814611318320169, 'macro_recall': 0.887175033115624, 'macro_f1': 0.8842946245378901, 'weighted_precision': 0.982344594139057, 'weighted_recall': 0.9822084157017792, 'weighted_f1': 0.9822745452347074, 'precision_label1': 0.7718684394681595, 'recall_label1': 0.7839374555792467, 'f1_label1': 0.7778561354019746, 'auc': 0.9839807290719216, 'pr_auc': 0.8487457509013413, 'per_class_f1': {'0': 0.9907331136738056, '1': 0.7778561354019746}, 'confusion_matrix': [[33677, 326], [304, 1103]], 'num_classes': 2, 'num_samples': 35410, 'loss': 0.06994254152804937, 'threshold': 0.44000000000000006}
+3、PositionOnly
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0625_RQ1_B/PositionOnlyEncoding/stage1_config_0625_B_P.yaml \
+  --out_dir /content/drive/MyDrive/s1/0625_RQ1_B/PositionOnlyEncoding \
+  --export_embeddings
+结果：[TEST] Full metrics: {'accuracy': 0.9807116633719288, 'macro_precision': 0.8793843014418258, 'macro_recall': 0.8625493891681995, 'macro_f1': 0.8707561876941456, 'weighted_precision': 0.9803091529199667, 'weighted_recall': 0.9807116633719288, 'weighted_f1': 0.9804928364554517, 'precision_label1': 0.7697466467958272, 'recall_label1': 0.7341862117981521, 'f1_label1': 0.7515460167333576, 'auc': 0.984098961459168, 'pr_auc': 0.836344857468425, 'per_class_f1': {'0': 0.9899663586549338, '1': 0.7515460167333576}, 'confusion_matrix': [[33694, 309], [374, 1033]], 'num_classes': 2, 'num_samples': 35410, 'loss': 0.07476086360452838, 'threshold': 0.4600000000000001}
+4、NoEncoding
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/ar002_et12_20260511_002-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/0625_RQ1_B/NoneEncoding/stage1_config_0625_B_None.yaml \
+  --out_dir /content/drive/MyDrive/s1/0625_RQ1_B/NoneEncoding \
+  --export_embeddings
+结果：[TEST] Full metrics: {'accuracy': 0.9727760519627224, 'macro_precision': 0.812703158077712, 'macro_recall': 0.8584174008142307, 'macro_f1': 0.8338138991653996, 'weighted_precision': 0.9749260174570117, 'weighted_recall': 0.9727760519627224, 'weighted_f1': 0.9737030385286343, 'precision_label1': 0.636475662353666, 'recall_label1': 0.7341862117981521, 'f1_label1': 0.6818481848184819, 'auc': 0.9764091324271922, 'pr_auc': 0.7587607223881117, 'per_class_f1': {'0': 0.9857796135123175, '1': 0.6818481848184819}, 'confusion_matrix': [[33413, 590], [374, 1033]], 'num_classes': 2, 'num_samples': 35410, 'loss': 0.09775692118257823, 'threshold': 0.4800000000000001}
+结合我的代码和配置，详细解析结果。
+从结果能看出什么？我下一步该做什么？

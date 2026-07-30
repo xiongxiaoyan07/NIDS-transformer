@@ -1,0 +1,578 @@
+% Preamble requirements:
+% \usepackage{amsmath,amssymb,booktabs,array,enumitem,tikz}
+% \usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+
+\section{Problem Formulation and System Overview}
+\label{sec:problem_formulation}
+
+This thesis formulates flow-level network intrusion detection as a hierarchical
+binary classification problem. The hierarchy arises from two nested structures
+in network traffic: packets form bidirectional flows, and related flows form
+larger temporal or host-level behaviors. Conventional flow-based classifiers
+typically compress the first structure into aggregate statistics and classify
+each resulting record independently. This is efficient, but it can discard
+packet order and irregular timing and can overlook evidence distributed across
+several flows \cite{SommerPaxson2010,Han2023GTID,LiuPatras2022NetSentry}.
+Transformer-based NIDS research has demonstrated the value of both flow
+sequences and long-range dependencies
+\cite{Manocchio2024FlowTransformer,MartinReizabal2026FlowWindow}; however, the
+two levels of the hierarchy are not always modeled jointly. The objective of
+this work is therefore to learn a representation that first captures
+\emph{intra-flow} packet dynamics and then incorporates \emph{inter-flow}
+context for the final decision.
+
+\subsection{Detection Setting and Design Requirements}
+\label{subsec:detection_setting}
+
+The detector operates on traffic extracted from PCAP traces. A custom Suricata
+output plugin produces packet-level and flow-level records that can be aligned
+through a flow identifier. Suricata is used as a practical traffic-processing
+and logging engine \cite{Roesch1999,SuricataGuide2026}; its alert outcome is
+used only during label construction. Alert counts, signature identifiers, rule
+messages, and other direct indicators of the label are excluded from the model
+input. The proposed detector also avoids direct payload content and instead
+uses packet-header fields, packet direction and timing, aggregate flow
+statistics, and metadata required to construct flow relationships. This setting
+supports encrypted traffic because it does not require payload decryption.
+
+The formulation is guided by the following requirements:
+
+\begin{enumerate}[label=\textbf{R\arabic*:},leftmargin=*]
+    \item \textbf{Hierarchical representation.} The model should preserve the
+    packet sequence inside each flow and should also represent dependencies
+    among related flows.
+
+    \item \textbf{Explicit network time.} Packet position and elapsed time must
+    be distinguishable. Adjacent packets can be separated by very different
+    intervals, so ordinal position alone is insufficient
+    \cite{Han2023GTID}.
+
+    \item \textbf{Payload independence.} Predictions should not require raw
+    application payloads, thereby reducing dependence on plaintext visibility
+    and limiting exposure of content-sensitive data.
+
+    \item \textbf{Causal context.} The context of a target flow may contain the
+    target itself and eligible historical flows, but it must not contain future
+    flows or labels. This requirement makes the formulation compatible with an
+    online detector.
+
+    \item \textbf{Imbalance-aware learning and evaluation.} Because malicious
+    flows are the minority class, the learning objective and reported metrics
+    must not be dominated by benign traffic.
+
+    \item \textbf{Reproducible separation of data.} Preprocessing, context
+    construction, model selection, and threshold selection must respect the
+    training, validation, and test partitions. This limits common sources of
+    experimental leakage in security machine learning
+    \cite{Arp2022DosDonts,Ring2019Datasets}.
+\end{enumerate}
+
+The scope of the thesis is supervised binary flow classification rather than
+attack prevention or rule generation. The output is a probability that the
+target flow is malicious. Multiclass attack attribution, zero-day guarantees,
+and automated response are outside the formal scope and are discussed as future
+work.
+
+\subsection{System Overview}
+\label{subsec:system_overview}
+
+Figure~\ref{fig:system_overview} summarizes the complete processing path. The
+pipeline begins with raw PCAP traffic and ends with one prediction per target
+flow. Packet and flow records are extracted together, aligned, cleaned, and
+partitioned before model training. Stage1 transforms each packet sequence into
+a time-aware representation and combines it with the corresponding statistical
+flow representation through late fusion. The resulting Stage1 embedding is a
+single fixed-dimensional vector per flow. Stage2 constructs a causal sequence
+of these embeddings according to a selected context relation and predicts the
+label of the target flow.
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+    node distance=4.5mm,
+    block/.style={
+        rectangle,
+        draw,
+        rounded corners=2pt,
+        align=center,
+        text width=11.3cm,
+        minimum height=7.5mm,
+        fill=black!3
+    },
+    arrow/.style={-{Latex[length=2mm]},thick}
+]
+    \node[block] (pcap) {Raw PCAP traffic};
+    \node[block, below=of pcap] (extract) {Custom Suricata output plugin};
+    \node[block, below=of extract] (records) {Packet records, flow statistics, flow identifiers, timestamps, and endpoint metadata};
+    \node[block, below=of records] (prep) {Alignment, cleaning, chronological ordering, feature transformation, and train/validation/test partitioning};
+    \node[block, below=of prep] (stage1) {Stage1: time-aware packet-sequence Transformer, attention pooling, and late fusion with encoded flow statistics};
+    \node[block, below=of stage1] (embedding) {One fused Stage1 embedding per flow};
+    \node[block, below=of embedding] (context) {Causal context construction: time-only, source-host, destination-host, or endpoint relation};
+    \node[block, below=of context] (stage2) {Stage2: context encoder and target-flow classifier};
+    \node[block, below=of stage2] (output) {Malicious-flow probability and binary prediction};
+
+    \draw[arrow] (pcap) -- (extract);
+    \draw[arrow] (extract) -- (records);
+    \draw[arrow] (records) -- (prep);
+    \draw[arrow] (prep) -- (stage1);
+    \draw[arrow] (stage1) -- (embedding);
+    \draw[arrow] (embedding) -- (context);
+    \draw[arrow] (context) -- (stage2);
+    \draw[arrow] (stage2) -- (output);
+\end{tikzpicture}
+\caption{Overview of the proposed hierarchical two-stage intrusion-detection
+pipeline. Labels and Suricata alert metadata are not used as model features.}
+\label{fig:system_overview}
+\end{figure}
+
+The two stages are trained sequentially in the current system. Stage1 is first
+optimized for flow-level classification and then used to export fused
+embeddings. Stage2 is trained on the exported embeddings and does not
+back-propagate gradients into Stage1. This separation permits independent
+evaluation of the representation learned in Stage1 and the contextual gain
+introduced by Stage2.
+
+\subsection{Input Space and Notation}
+\label{subsec:input_notation}
+
+Let the dataset contain $N$ bidirectional flows sorted by flow start time. The
+$i$th flow is represented by
+
+\begin{equation}
+\mathcal{F}_i =
+\left(
+    \mathbf{X}_i,
+    \boldsymbol{\tau}_i,
+    \mathbf{b}_i,
+    \mathbf{s}_i,
+    \mathbf{q}_i,
+    y_i
+\right),
+\end{equation}
+
+where the components are defined in
+Table~\ref{tab:problem_notation}. The complete supervised dataset is
+
+\begin{equation}
+\mathcal{D}=\{\mathcal{F}_i\}_{i=1}^{N}.
+\end{equation}
+
+\begin{table}[t]
+\centering
+\caption{Notation used in the hierarchical problem formulation.}
+\label{tab:problem_notation}
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}p{2.3cm}p{3.2cm}p{9.7cm}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Domain} & \textbf{Meaning} \\
+\midrule
+$N$ & $\mathbb{N}$ & Number of flows. \\
+$T_i$ & $\mathbb{N}$ & Number of observed packets in flow $i$ before sequence selection. \\
+$L_{\max}$ & $\mathbb{N}$ & Maximum number of packet tokens retained for Stage1. \\
+$\mathbf{X}_i$ & $\mathbb{R}^{L_i\times d_p}$ & Selected packet-feature sequence, where $L_i\leq L_{\max}$ and $d_p$ is the packet-feature dimension. \\
+$\boldsymbol{\tau}_i$ & $\mathbb{R}^{L_i}$ & Packet timestamps or elapsed-time values aligned with $\mathbf{X}_i$. \\
+$\mathbf{b}_i$ & $\{0,1\}^{L_{\max}}$ & Packet mask; one denotes an observed packet and zero denotes padding. \\
+$\mathbf{s}_i$ & $\mathbb{R}^{d_f}$ & Flow-level statistical feature vector. \\
+$\mathbf{q}_i$ & $\mathcal{Q}$ & Context metadata: source identifier, destination identifier, flow start time, and split membership. \\
+$y_i$ & $\{0,1\}$ & Flow label, with zero for benign and one for malicious. \\
+$\mathbf{z}^{(1)}_i$ & $\mathbb{R}^{d_1}$ & Fused Stage1 embedding for flow $i$. \\
+$\mathcal{C}^{(r)}_i$ & Subset of $\{1,\ldots,i-1\}$ & Historical context indices for target flow $i$ under relation $r$. \\
+$W$ & $\mathbb{N}$ & Maximum Stage2 sequence length, including the target flow when it is appended. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Before padding, flow $i$ contains an ordered packet sequence
+
+\begin{equation}
+\mathcal{P}_i=
+\left(p_{i,1},p_{i,2},\ldots,p_{i,T_i}\right),
+\qquad
+\tau_{i,1}\leq\tau_{i,2}\leq\cdots\leq\tau_{i,T_i}.
+\end{equation}
+
+Each retained packet is represented by a feature vector
+$\mathbf{x}_{i,t}\in\mathbb{R}^{d_p}$. Packet timing can be expressed through
+both elapsed time from the first retained packet and local inter-arrival time:
+
+\begin{align}
+e_{i,t} &= \tau_{i,t}-\tau_{i,1}, \\
+\Delta\tau_{i,t} &=
+\begin{cases}
+0, & t=1,\\
+\max(0,\tau_{i,t}-\tau_{i,t-1}), & t>1.
+\end{cases}
+\end{align}
+
+A deterministic sequence-selection operator $\Pi_{L_{\max}}$ converts a
+variable-length flow into at most $L_{\max}$ packet tokens:
+
+\begin{equation}
+\mathbf{X}_i=
+\Pi_{L_{\max}}
+\left(
+    \mathbf{x}_{i,1},\ldots,\mathbf{x}_{i,T_i}
+\right).
+\end{equation}
+
+The operator covers the evaluated head, head--tail, and random strategies. Its
+choice changes which packets are retained but does not change the label or the
+flow-level statistical vector. Padding is applied only after selection and is
+excluded from attention and pooling through $\mathbf{b}_i$.
+
+The context metadata can be written as
+
+\begin{equation}
+\mathbf{q}_i=(u_i,v_i,t_i^{0},\rho_i),
+\end{equation}
+
+where $u_i$ and $v_i$ are the source and destination identifiers, $t_i^{0}$ is
+the flow start time, and $\rho_i\in\{\mathrm{train},\mathrm{val},\mathrm{test}\}$
+denotes split membership. These identifiers determine context membership; they
+are not labels and need not be directly embedded as numerical packet features.
+
+\subsection{Stage1: Intra-Flow Representation Learning}
+\label{subsec:stage1_formulation}
+
+Stage1 learns one representation from the packets of a single flow. Packet
+features are first projected into a $d_1$-dimensional latent space:
+
+\begin{equation}
+\mathbf{e}_{i,t}=W_p\mathbf{x}_{i,t}+\mathbf{c}_p.
+\end{equation}
+
+The model then adds information about ordinal position and network time:
+
+\begin{equation}
+\widetilde{\mathbf{e}}_{i,t}
+=
+\mathbf{e}_{i,t}
++\phi_{\mathrm{pos}}(t)
++\phi_{\mathrm{time}}(e_{i,t},\Delta\tau_{i,t}).
+\end{equation}
+
+The functions $\phi_{\mathrm{pos}}$ and $\phi_{\mathrm{time}}$ are written
+separately because packet index and elapsed time convey different information.
+The exact scaling, transformation, and fusion of the two encodings are specified
+in the methodology chapter. A mask-aware Transformer encoder
+\cite{Vaswani2017} produces contextualized packet states:
+
+\begin{equation}
+\mathbf{H}^{p}_i
+=
+\mathrm{Transformer}_{1}
+\left(
+    \widetilde{\mathbf{E}}_i;
+    \mathbf{b}_i
+\right),
+\qquad
+\mathbf{H}^{p}_i\in\mathbb{R}^{L_{\max}\times d_1}.
+\end{equation}
+
+The valid packet states are reduced to one packet-sequence representation by
+attention pooling. For each valid position,
+
+\begin{align}
+r_{i,t} &=
+\mathbf{w}_{a}^{\top}
+\tanh(W_a\mathbf{h}^{p}_{i,t}+\mathbf{c}_a),\\
+a_{i,t} &=
+\frac{
+    b_{i,t}\exp(r_{i,t})
+}{
+    \sum_{k=1}^{L_{\max}}b_{i,k}\exp(r_{i,k})
+},\\
+\mathbf{z}^{p}_i &=
+\sum_{t=1}^{L_{\max}}a_{i,t}\mathbf{h}^{p}_{i,t}.
+\end{align}
+
+In parallel, the statistical flow vector is mapped into the same latent space:
+
+\begin{equation}
+\mathbf{z}^{f}_i=E_f(\mathbf{s}_i).
+\end{equation}
+
+Late fusion produces the final Stage1 embedding:
+
+\begin{equation}
+\mathbf{z}^{(1)}_i
+=
+\mathrm{Fuse}_{\psi}
+\left(
+    \mathbf{z}^{p}_i,
+    \mathbf{z}^{f}_i
+\right).
+\label{eq:stage1_fusion}
+\end{equation}
+
+This formulation is deliberately different from repeating
+$\mathbf{s}_i$ at every packet position. Packet-sequence learning is completed
+before the aggregate statistics are fused, allowing the contribution of each
+view to be measured independently. The Stage1 classifier is
+
+\begin{equation}
+\mathbf{p}^{(1)}_i
+=
+\mathrm{softmax}
+\left(
+    h_1(\mathbf{z}^{(1)}_i)
+\right),
+\end{equation}
+
+where $p^{(1)}_{i,1}$ is the predicted probability of a malicious flow. This
+prediction supports direct evaluation of Stage1 and therefore operationalizes
+RQ1 before any cross-flow context is introduced.
+
+\subsection{Stage2: Causal Inter-Flow Context Modeling}
+\label{subsec:stage2_formulation}
+
+After Stage1 inference, every flow has an embedding
+$\mathbf{z}^{(1)}_i$. Let the complete set of strictly historical flows for
+target $i$ be
+
+\begin{equation}
+\mathcal{H}_i=\{j\mid j<i\},
+\end{equation}
+
+where indices follow a stable chronological ordering. The system defines a
+binary relation $R_r(i,j)$ for each context method $r$:
+
+\begin{align}
+R_{\mathrm{time}}(i,j)
+&=1,\\
+R_{\mathrm{src}}(i,j)
+&=\mathbb{I}[u_i=u_j],\\
+R_{\mathrm{dst}}(i,j)
+&=\mathbb{I}[v_i=v_j],\\
+R_{\mathrm{endpoint}}(i,j)
+&=\mathbb{I}
+\left[
+    \{u_i,v_i\}\cap\{u_j,v_j\}\neq\varnothing
+\right].
+\end{align}
+
+The eligible historical set is
+
+\begin{equation}
+\mathcal{A}^{(r)}_i
+=
+\left\{
+    j\in\mathcal{H}_i
+    \mid
+    R_r(i,j)=1
+\right\}.
+\end{equation}
+
+Given a maximum Stage2 length $W$, the context builder retains at most the
+$W-1$ most recent eligible and deduplicated flows:
+
+\begin{equation}
+\mathcal{C}^{(r)}_i
+=
+\mathrm{Recent}_{W-1}
+\left(
+    \mathcal{A}^{(r)}_i
+\right).
+\label{eq:context_set}
+\end{equation}
+
+If
+$\mathcal{C}^{(r)}_i=(j_1,\ldots,j_{K_i})$ with $K_i\leq W-1$, the Stage2 input
+sequence is
+
+\begin{equation}
+\mathbf{Z}^{(r)}_i
+=
+\left[
+    \mathbf{z}^{(1)}_{j_1},
+    \ldots,
+    \mathbf{z}^{(1)}_{j_{K_i}},
+    \mathbf{z}^{(1)}_i
+\right].
+\label{eq:stage2_sequence}
+\end{equation}
+
+The current flow is appended as the final valid token. It does not reveal its
+label; it provides the representation that Stage2 must classify. Padding and a
+context mask are added when fewer than $W-1$ historical flows are available.
+Because the histories are updated only after the current context is built,
+Equations~\ref{eq:context_set}--\ref{eq:stage2_sequence} exclude both the future
+and accidental self-duplication.
+
+The primary formulation uses an online context policy: earlier flows can remain
+available as state when the detector moves from training to validation and test
+periods, but no label is retrieved and no future flow is visible. A
+split-isolated policy can additionally restrict candidates to the target split
+for sensitivity analysis. The policy used in each experiment must be reported
+because context availability and the risk of leakage depend on it.
+
+Stage2 projects and positionally encodes the context sequence before applying a
+second sequence encoder:
+
+\begin{equation}
+\mathbf{G}^{(r)}_i
+=
+\mathrm{Transformer}_{2}
+\left(
+    \mathrm{Proj}_{2}(\mathbf{Z}^{(r)}_i)
+    +\Phi_{2};
+    \boldsymbol{\mu}_i
+\right),
+\end{equation}
+
+where $\boldsymbol{\mu}_i$ is the context mask. Let
+$\mathbf{g}^{(r)}_i$ denote the state at the final valid, target-flow position.
+The context-aware probability is
+
+\begin{equation}
+\mathbf{p}^{(2,r)}_i
+=
+\mathrm{softmax}
+\left(
+    h_2(\mathbf{g}^{(r)}_i)
+\right).
+\label{eq:stage2_prediction}
+\end{equation}
+
+A no-context classifier provides the control condition
+
+\begin{equation}
+\mathbf{p}^{(\mathrm{nc})}_i
+=
+\mathrm{softmax}
+\left(
+    h_{\mathrm{nc}}(\mathbf{z}^{(1)}_i)
+\right).
+\end{equation}
+
+Comparing Equation~\ref{eq:stage2_prediction} with the no-context control tests
+whether neighboring flows add information beyond the capacity of another
+classifier. Comparing the four relations tests which temporal or endpoint
+assumption is most useful, thereby operationalizing RQ2.
+
+\subsection{Learning Objectives and Decision Rule}
+\label{subsec:learning_objectives}
+
+Both stages solve an imbalanced binary classification problem. For stage
+$\ell\in\{1,2\}$, let $p^{(\ell)}_{i,y_i}$ denote the probability assigned to
+the correct class. The focal objective is
+
+\begin{equation}
+\mathcal{L}_{\ell}
+=
+-\frac{1}{|\mathcal{D}_{\mathrm{train}}|}
+\sum_{i\in\mathcal{D}_{\mathrm{train}}}
+\alpha^{(\ell)}_{y_i}
+\left(
+    1-p^{(\ell)}_{i,y_i}
+\right)^{\gamma_{\ell}}
+\log p^{(\ell)}_{i,y_i},
+\label{eq:focal_objective}
+\end{equation}
+
+where $\gamma_{\ell}\geq0$ controls the emphasis on difficult examples and
+$\alpha^{(\ell)}_{y_i}$ optionally controls class weighting
+\cite{Lin2017FocalLoss}. Cross-entropy is recovered when
+$\gamma_{\ell}=0$ and the class weights are uniform. The precise loss
+configuration is treated as an experimental setting rather than an inherent
+requirement of the architecture.
+
+The current implementation uses sequential optimization. First,
+
+\begin{equation}
+\theta_1^{*}
+=
+\arg\min_{\theta_1}
+\mathcal{L}_{1}(\theta_1),
+\end{equation}
+
+after which Stage1 exports
+$\{\mathbf{z}^{(1)}_i(\theta_1^{*})\}_{i=1}^{N}$. Stage2 then solves
+
+\begin{equation}
+\theta_2^{*}
+=
+\arg\min_{\theta_2}
+\mathcal{L}_{2}
+\left(
+    \theta_2;
+    \{\mathbf{z}^{(1)}_i(\theta_1^{*})\}_{i=1}^{N}
+\right).
+\end{equation}
+
+This formulation prevents Stage2 experiments from silently changing the
+Stage1 representation and permits controlled comparisons among context methods
+and Stage2 architectures.
+
+For the malicious class, the final probability is
+$p_i=p^{(2,r)}_{i,1}$, or $p_i=p^{(1)}_{i,1}$ when Stage1 is evaluated alone. A
+binary decision is obtained using
+
+\begin{equation}
+\widehat{y}_i
+=
+\mathbb{I}[p_i\geq\delta^{*}],
+\end{equation}
+
+where the decision threshold is selected exclusively on the validation set:
+
+\begin{equation}
+\delta^{*}
+=
+\arg\max_{\delta\in\Delta}
+M_{\mathrm{val}}(\delta).
+\end{equation}
+
+Here, $M_{\mathrm{val}}$ is the predefined threshold-selection metric and
+$\Delta$ is the threshold search grid. The test set is evaluated once with the
+selected model and threshold; it is not used to tune either quantity.
+
+\subsection{Mapping the Formulation to the Research Questions}
+\label{subsec:rq_mapping}
+
+The formulation isolates the two contributions so that each research question
+has a direct experimental test. Table~\ref{tab:rq_mapping} summarizes this
+mapping.
+
+\begin{table}[t]
+\centering
+\caption{Mapping between research questions, controlled comparisons, and
+principal evidence.}
+\label{tab:rq_mapping}
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}p{1.1cm}p{5.0cm}p{5.2cm}p{4.2cm}@{}}
+\toprule
+\textbf{RQ} & \textbf{Question in the formulation} & \textbf{Primary controlled comparisons} & \textbf{Principal evidence} \\
+\midrule
+RQ1 & Does $\mathbf{z}^{(1)}_i$ contain more useful attack information than aggregate flow statistics alone? & Flow-statistics MLP; CNN/LSTM/GRU baselines; positional/time encoding ablations; sequence-length and packet-selection studies; flow-fusion ablation. & Macro-F1, macro-precision, macro-recall, attack-class F1, PR-AUC, ROC-AUC, confusion matrix, and FPR. \\
+RQ2 & Does $\mathcal{C}^{(r)}_i$ improve prediction beyond an independent classifier on $\mathbf{z}^{(1)}_i$? & Stage1-only and no-context controls; time-only, source-host, destination-host, and endpoint context; window-size ablation; Transformer, LSTM, GRU, and CNN--LSTM Stage2 encoders. & The same detection metrics, together with context availability and changes in FP and FN. \\
+Cost & What computational cost is introduced by each representation and context model? & Stage1 and Stage2 models under the same implementation and hardware protocol. & Parameter count, training time, test inference time, and throughput where available. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This separation is central to interpreting the final results. An improvement in
+Stage1 supports the claim that packet timing and flow-statistical fusion improve
+the representation of an individual flow. A further improvement from Stage2,
+under the same Stage1 embeddings and test flows, supports the distinct claim
+that related historical flows provide additional evidence. Efficiency results
+then determine whether either improvement is operationally proportionate to its
+computational cost.
+
+\subsection{Chapter Summary}
+\label{subsec:problem_summary}
+
+The proposed problem is a causal, hierarchical, payload-independent
+classification task. Stage1 maps an ordered and timed packet sequence together
+with its flow statistics to a fused embedding. Stage2 constructs a bounded
+historical context over these embeddings and predicts the label of the final
+target flow. The separation between the stages supports controlled answers to
+RQ1 and RQ2, while validation-only threshold selection, mask-aware sequence
+processing, and explicit context policies establish the constraints required
+for a reliable evaluation. The following chapters describe how the PCAP data
+are transformed into the variables defined here and how the two model stages
+are implemented and evaluated.

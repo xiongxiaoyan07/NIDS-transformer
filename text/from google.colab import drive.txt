@@ -1,0 +1,51 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/configs/stage1_short_100_headtail_position_only_config.yaml \
+  --out_dir /content/drive/MyDrive/s1/stage1_artifacts_short_100_headtail_head_position_only
+
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/configs/stage1_short_100_headtail_time_only_config.yaml \
+  --out_dir /content/drive/MyDrive/s1/stage1_artifacts_short_100_headtail_time_only
+
+!python /content/drive/MyDrive/s1/run_stage1.py \
+  --packet_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_packets.csv \
+  --flow_csv /content/drive/MyDrive/s1/data/firewall_test_20250731_160700-stage1_flows.csv \
+  --config /content/drive/MyDrive/s1/configs/stage1_short_100_headtail_none_config.yaml \
+  --out_dir /content/drive/MyDrive/s1/stage1_artifacts_short_100_headtail_none
+
+
+
+上传的文件是我的代码的第一部分，数据处理（包括数据清洗、packet截取、划分训练和测试集、normalization、DataLoader）。 请结合我的代码，我该如何选择特征中使用和不使用flow级别的特征？详细解析，并提供代码修正
+
+方案对比
+方案	优点	缺点
+方案A: 与packet拼接（当前）	1. Transformer可以直接学习packet-flow交互
+2. 简单，无需额外架构修改	1. 特征冗余（同一流的所有包有相同flow特征）
+2. 增加计算量
+3. 可能导致梯度传播问题
+方案B: 仅用packet特征	1. 最简洁
+2. 完全依赖序列模式	1. 丢失flow级别的统计信息
+2. 可能影响检测精度
+方案C: 分层注入（推荐）	1. 分离关注点
+2. 充分利用flow统计信息	1. 需要修改模型架构
+2. 需要额外的融合模块
+推荐的修改方案
+
+我建议采用方案C：分层特征注入。具体来说，保留 flow 特征的计算，但不在每个 packet 上拼接，而是在经过 Intra-flow Transformer 处理后的流表示上进行融合。
+
+修改后的架构流程：
+Packet序列 → Intra-flow Transformer → Flow representation (z_intra)
+                                              ↓
+Flow特征 (原始flow统计) → Flow Encoder → Flow embedding
+                                              ↓
+                              Concatenate / Gated Fusion
+                                              ↓
+                                    Joint representation
+                                              ↓
+                                    Classification Head

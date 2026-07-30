@@ -1,0 +1,35 @@
+为了追求绝对精准的加权平均损失，第二种方法在每个 batch 里都执行了 `x.size(0)`（获取 Batch Size）、乘法、以及最后的除法。虽然单个 Batch 损耗极小，但**频繁在 CPU 和 GPU 之间同步或频繁调用 Python 底层整型转换（`float(loss.item())`）**，在数百个迭代后会积少成多，形成微小的 CPU 瓶颈（CPU Bound）。
+
+---
+
+### 4. 训练后的“重型”后处理与评测（最明显的耗时差距）
+如果你觉得“整个函数运行完”的时间第一个方法快得多，那是因为第二个方法在训练结束后塞入了**大量的评估和可视化图表生成代码**。
+
+第一个方法在训练结束后直接 `return history` 结束了。而第二个方法在 `for` 循环结束后，还执行了以下密集操作：
+* **寻找最优阈值 (`find_optimal_threshold`)**：这通常需要把验证集全部推理一遍，并在 CPU 上用循环测试 0.0 到 1.0 之间的几百个阈值。
+* **测试集完整评估**：使用最优阈值重新跑一遍测试集的推理。
+* **数据标签重新扫描**：
+    ```python
+    for batch in loaders["test"]:
+        unique_labels.update(batch["label"].numpy().tolist())
+    ```
+    这里竟然**把整个测试集又全量循环迭代了一遍**，仅仅为了获取 `class_names`！这是非常严重的、重复的数据加载 I/O 浪费。
+* **绘制并保存 4 张图表**：`_plot_threshold_search`、`plot_training_curves`、`plot_confusion_matrix`、`plot_per_class_f1`。Matplotlib 绘图并保存为图片文件（`.png` / `.pt`）是非常消耗 CPU 和磁盘 I/O 时间的。
+
+---
+
+### 5. 早期停止（Early Stopping）的触发频率
+* **第一个方法**的 `patience` 默认是 **10**，监控的是 `val_f1_class1`（单一类别的 F1）。
+* **第二个方法**的 `patience` 默认是 **5**，监控的是 `f1_label1` 或 `macro_f1`，并且它**每 5 个 Epoch 才打印一次日志**。
+* **潜在影响**：由于第二个方法采用了 `WeightedRandomSampler`（如注释所言，数据已经平衡），且 `patience` 只有 5，如果指标发生轻微震荡，第二个方法可能**极快地触发了 Early Stopping 从而终止了训练**。但如果它没有终止，它的每一个 Epoch 评测指标（Accuracy, Macro F1, Weighted F1, AUC 等多项指标同时计算）复杂度也远高于第一个方法仅计算 `f1_class1`。
+
+---
+
+### 总结
+
+| 阶段 | 第一个方法 (`train_deep_model`) | 第二个方法 (`train_model`) |
+| :--- | :--- | :--- |
+| **数据传输** | 动态 `get()`，无用数据不传输 | 严格位置参数，全量张量传输 |
+| **指标监控** | 仅计算单个类的 `f1_class1` | 同时计算 Accuracy、Macro F1、Weighted F1、AUC 等 |
+| **后处理** | 🌟 无，直接返回 | 🌟 **极大瓶颈**：全量扫描测试集获取标签、搜索最优阈值、绘制并保存 4 张图片 |
+| **磁盘 I/O** | 仅在内存中保存 `state_dict` | 频繁执行 `torch.save` 和 `save_json` 到硬盘 |

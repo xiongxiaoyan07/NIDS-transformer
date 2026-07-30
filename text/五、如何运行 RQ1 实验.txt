@@ -1,0 +1,214 @@
+五、如何运行 RQ1 实验
+
+RQ1 是：
+
+time-aware packet-sequence modeling 是否比 flow-level aggregation 更有效？
+
+建议不要一次做巨大笛卡尔积，而是按层次运行。
+
+第一组：核心模型对比
+ID	模型	输入
+F1	Random Forest	flow statistics
+F2	XGBoost/LightGBM	flow statistics
+F3	MLP	flow statistics
+P1	LSTM	packet sequence
+P2	CNN1D	packet sequence
+P3	Standard Transformer	packet sequence + PE
+Ours	Time-aware Transformer	packet sequence + PE + IAT
+
+主结论来自：
+
+flow-only vs packet-sequence vs time-aware packet-sequence
+第二组：时间编码消融
+
+需要四个配置文件：
+
+NoEncoding
+model:
+  use_positional_encoding: false
+  use_time_encoding: false
+PositionOnly
+model:
+  use_positional_encoding: true
+  use_time_encoding: false
+TimeOnly
+model:
+  use_positional_encoding: false
+  use_time_encoding: true
+Both
+model:
+  use_positional_encoding: true
+  use_time_encoding: true
+
+分别运行到独立目录：
+
+artifacts/ablation_no_encoding_seed42/
+artifacts/ablation_position_seed42/
+artifacts/ablation_time_seed42/
+artifacts/ablation_both_seed42/
+
+你的 comparison.py 中已经定义了这些模型变体，但 run_stage1.py 不会自动调用它们。
+
+comparison
+
+因此需要补一个独立：
+
+run_comparison.py
+
+否则当前只能通过复制 YAML 并分别运行主入口完成消融。
+
+第三组：packet-only 与 flow fusion
+
+比较：
+
+模式	设置
+B	packet only
+A	flow statistics tiled to each packet
+C	packet embedding + late flow fusion
+
+推荐论文主模型优先用 C，而不是 A。
+
+原因是 A 会将相同 flow statistics 重复到每个 packet token：
+
+[pkt_1 ; s_i]
+[pkt_2 ; s_i]
+...
+[pkt_T ; s_i]
+
+这增加冗余，也可能让 Transformer 过度依赖 flow statistics。
+
+C 更符合层级设计：
+
+𝑧
+𝑖
+𝑝
+𝑎
+𝑐
+𝑘
+𝑒
+𝑡
+=
+𝑇
+𝑟
+𝑎
+𝑛
+𝑠
+𝑓
+𝑜
+𝑟
+𝑚
+𝑒
+𝑟
+(
+𝑋
+𝑖
+)
+z
+i
+packet
+	​
+
+=Transformer(X
+i
+	​
+
+)
+𝑧
+𝑖
+=
+𝐹
+𝑢
+𝑠
+𝑖
+𝑜
+𝑛
+(
+𝑧
+𝑖
+𝑝
+𝑎
+𝑐
+𝑘
+𝑒
+𝑡
+,
+𝑠
+𝑖
+)
+z
+i
+	​
+
+=Fusion(z
+i
+packet
+	​
+
+,s
+i
+	​
+
+)
+
+不过需要明确：这里的“hierarchical fusion”仍然属于 Stage1，不是 proposal 中的 inter-flow Stage2。
+
+第四组：sequence length
+
+建议：
+
+L = 16, 32, 64, 128
+
+先固定 head。
+
+得到最合理长度后，再比较：
+
+head
+head_tail
+random
+
+在修复截断后的时间重计算之前，不应正式报告 head-tail/random 结果。
+
+第五组：loss 消融
+training:
+  loss: ce
+
+对比：
+
+training:
+  loss: focal
+
+所有其他配置、split 和 seed 必须完全一致。
+
+不要同时启用非常激进的：
+
+WeightedRandomSampler；
+
+balanced alpha；
+
+focal loss。
+
+否则三种不平衡处理叠加，可能导致少数类过度补偿。
+
+推荐按顺序比较：
+
+CE；
+
+weighted CE；
+
+focal；
+
+focal + mild alpha。
+
+第六组：多随机种子
+
+每个最终模型至少运行 3 个 seed，例如：
+
+42
+130
+2026
+
+论文报告：
+
+mean ± standard deviation
+
+仅报告单次最好结果不够可靠。

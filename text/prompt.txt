@@ -1,0 +1,1 @@
+“我正在使用 Suricata 生成 Stage1 的网络流量 CSV 数据（stage1_packets.csv 和 stage1_flows.csv），并希望实现 Flow Transformer 论文中的 Stage1 模块（Packet-level Feature Construction）用于网络入侵检测。请根据 CSV 文件内容，生成 Stage1 的数据预处理和特征构建代码，输出每个 flow 的 packet-level 特征矩阵，支持时间编码（inter-arrival time）和 flow-level统计特征，确保可以直接作为 PyTorch Transformer 模型的输入。”

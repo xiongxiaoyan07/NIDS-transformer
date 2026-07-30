@@ -1,0 +1,759 @@
+% Experimental Methodology chapter for:
+% A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection
+%
+% Required packages already used by the thesis:
+%   amsmath, booktabs, multirow, array, graphicx
+% Recommended in the main preamble:
+%   \usepackage{amssymb}
+%
+% The platform and purchased allocation are known. Replace the remaining
+% environment macros with values captured from each final Colab runtime.
+% In particular, do not replace \ExpGPU with only "GPU": record T4 or L4.
+\providecommand{\ExpPlatform}{Google Colaboratory Pro+}
+\providecommand{\ExpComputeBudget}{600 purchased compute units}
+\providecommand{\ExpGPU}{NVIDIA T4 (16~GB) or NVIDIA L4 (24~GB); exact model recorded per run}
+\providecommand{\ExpCPU}{\textit{[insert CPU model and RAM]}}
+\providecommand{\ExpOS}{Google Colab hosted Linux runtime; \textit{[insert runtime image details]}}
+\providecommand{\ExpSoftware}{\textit{[insert Python, PyTorch, CUDA, and scikit-learn versions]}}
+\providecommand{\ExpSuricata}{\textit{[insert Suricata version and custom-plugin revision]}}
+
+\chapter{Experimental Methodology}
+\label{sec:experimental_methodology}
+
+This chapter defines the protocol used to evaluate the proposed hierarchical
+detector. Its purpose is to separate model development from final evaluation,
+to make comparisons between alternatives fair, and to ensure that every
+reported number can be traced to a dataset manifest, model configuration,
+checkpoint, decision threshold, and random seed. This separation is especially
+important in intrusion detection because temporal leakage, class imbalance,
+and repeated use of the test set can produce highly optimistic conclusions
+\cite{SommerPaxson2010,Arp2022DosDonts}.
+
+To avoid duplicating earlier chapters, this chapter does not redefine the raw
+packet and flow schemas, the mathematical detection problem, or the internal
+layers of the proposed models. Dataset provenance and transformations are
+given in Section~\ref{sec:dataset_preprocessing}, the research questions and
+notation in Section~\ref{sec:problem_formulation}, and the architecture in
+Section~\ref{sec:proposed_methodology}. The present chapter specifies only the
+experimental comparisons, controls, optimization protocol, metrics,
+statistical analysis, and computational measurement needed to test that
+methodology.
+
+The evaluation is organized around the two research questions mapped to
+controlled comparisons in Table~\ref{tab:rq_mapping}. Stage~1 experiments
+address whether ordered packet records,
+continuous-time information, and flow statistics improve the representation
+of an individual flow. Stage~2 experiments address whether causal context from
+earlier related flows improves the classification of the current flow. In both
+stages, macro-F1 is the primary threshold-dependent metric. Macro-precision,
+macro-recall, class-1 performance, ROC-AUC, PR-AUC, the confusion matrix, and
+the false-positive rate (FPR) provide complementary evidence. Parameter count,
+training time, and inference time are reported to distinguish predictive gains
+from increases in computational cost.
+
+\section{Experimental Logic}
+\label{subsec:experimental_questions}
+
+The research-question definitions and their conceptual controls already appear
+in Table~\ref{tab:rq_mapping}; they are not repeated here. They are converted
+below into named experiment groups. Within a group, one factor is changed while
+the ordered data manifest, fitted preprocessor, optimization budget, model
+selection rule, and evaluation code remain fixed. Stage~1 groups test the
+intra-flow representation, Stage~2 groups test the additional value of causal
+inter-flow history, and a final measurement layer tests statistical stability
+and computational cost. This design prevents a gain caused by a different
+split, threshold, or training rule from being attributed to the architecture.
+
+Experiments are divided into \emph{exploratory} and \emph{confirmatory}
+comparisons. Hyperparameter and sensitivity sweeps are exploratory and use the
+validation partition to identify useful settings. Confirmatory comparisons use
+the resulting frozen configuration and evaluate the test partition once. The
+test partition is never used to choose sequence length, context method, window
+size, checkpoint, loss, or threshold. This distinction follows established
+recommendations for avoiding test-set overfitting in empirical machine
+learning and security research \cite{Arp2022DosDonts,Pineau2021Reproducibility}.
+
+\section{Dataset Partition and Leakage Controls}
+\label{subsec:experimental_data_protocol}
+
+All experiments use the aligned flow manifest constructed in
+Section~\ref{sec:dataset_preprocessing}. The PCAP provenance, exact packet and
+flow counts, label distribution, selected predictors, and exclusions are
+reported once in Sections~\ref{subsec:raw_composition}--
+\ref{subsec:feature_selection} and are not restated here. The experimental
+invariant is that every comparison uses the same flow universe and the same
+training-fitted preprocessing state unless a table explicitly identifies a
+separate exploratory manifest.
+
+\subsubsection{Chronological Hold-Out Protocol}
+\label{subsubsec:chronological_holdout}
+
+The fixed 70/10/20 chronological split and its exact counts are defined in
+Table~\ref{tab:chronological_split}. Unique flows are stably ordered by
+\texttt{flow\_start\_timestamp\_us}, with \texttt{flow\_id} as the
+deterministic tie-breaker, and all packets from one flow remain in the same
+partition. This chronological design evaluates the more deployment-like
+setting in which a detector is trained on earlier traffic and applied to later
+traffic, rather than allowing temporally adjacent records to be distributed
+randomly across partitions \cite{SommerPaxson2010,Arp2022DosDonts}.
+
+All data-dependent transformations are fitted using the training partition
+only. These include categorical vocabularies, quantile clipping bounds,
+logarithmic transformations, and robust-scaling parameters. The fitted
+preprocessor is then applied without refitting to validation and test data.
+Class weights and sampling probabilities are also calculated from training
+labels only.
+
+\subsubsection{Stage~2 Causality and Split Policy}
+\label{subsubsec:stage2_evaluation_causality}
+
+Stage~2 consumes embeddings exported by one frozen Stage~1 checkpoint. Its
+context builder scans flows in chronological order and updates a history only
+after the current example has been constructed. Consequently, the context of
+flow $i$ may contain only flows with earlier timestamps; neither future
+embeddings nor historical labels are retrieved. Under the principal
+\texttt{online} policy, a validation example may use earlier training flows,
+and a test example may use earlier training, validation, and test flows. This
+simulates a continuously operating detector whose past observations remain
+available, while preserving the rule that no future observation can influence
+the present prediction.
+
+All Stage~2 model comparisons use exactly the same Stage~1 embedding files,
+metadata ordering, context indices, and left-padding masks. The Stage~1 encoder
+is not fine-tuned during Stage~2 training. A change in Stage~1 checkpoint would
+therefore constitute a new experiment rather than a Stage~2 architecture
+ablation.
+
+\paragraph{Comparability rule.}
+Only runs evaluated on the same ordered flow manifest may appear in the same
+ranking table or paired statistical test. Several early Stage~1 experiments
+produced results for $35{,}410$ test flows, whereas the principal full-data
+manifest contains $84{,}380$ test flows. These results measure performance on
+different empirical distributions and are not directly comparable. The final
+main tables must therefore either rerun all relevant Stage~1 alternatives on
+the $84{,}380$-flow manifest or present the smaller-manifest experiments in a
+separate exploratory table with their sample count stated explicitly.
+
+\section{Experimental Matrix}
+\label{subsec:experimental_matrix}
+
+The complete evaluation matrix is summarized in
+Table~\ref{tab:experiment_matrix}. The matrix separates comparisons intended
+to evaluate the packet encoder from comparisons intended to evaluate the full
+hierarchical system.
+
+\begin{table}[t]
+    \centering
+    \caption{Experimental matrix. Only the factor listed in the final column is
+    changed within each experiment group.}
+    \label{tab:experiment_matrix}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{@{}lllll@{}}
+        \toprule
+        Group & Stage & Fixed reference & Compared alternatives & Varied factor \\
+        \midrule
+        S1-E1 & 1 & Full chronological split & Flow MLP; packet
+        sequence models; proposed Stage~1 & Encoder family \\
+        S1-E2 & 1 & Scheme B, $L=128$, head & Both, position-only,
+        time-only, no encoding & Temporal/order encoding \\
+        S1-E3 & 1 & Both encodings, $L=128$, head & Schemes A, B, C &
+        Flow-statistics integration \\
+        S1-E4 & 1 & Scheme B, head & $L=8,16,32,64,128,256$ & Packet budget \\
+        S1-E5 & 1 & Scheme B, $L=128$ & Head, head-tail, random &
+        Truncation policy \\
+        S2-E1 & 2 & Same frozen Stage~1 embeddings & No-context MLP;
+        Transformer; LSTM; GRU; CNN+LSTM; proposed & Context encoder \\
+        S2-E2 & 2 & Proposed model, $W=128$ & Time-only, source-host,
+        destination-host, endpoint & Context relation \\
+        S2-E3 & 2 & Proposed model, source-host & $W=16,32,64,128,256$ &
+        Context capacity \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+\subsubsection{Stage~1 Baselines}
+\label{subsubsec:stage1_baselines}
+
+The Stage~1 comparison includes the following baselines:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Flow-level MLP.} A multilayer perceptron consumes only the
+    aggregated statistical flow vector. It provides the direct reference for
+    testing whether packet-level sequence information adds value beyond
+    conventional flow aggregation.
+
+    \item \textbf{CNN1D.} Parallel one-dimensional convolutions with kernel
+    sizes 3, 5, and 7 capture local packet motifs, followed by global pooling
+    and classification. A second variant concatenates the log inter-arrival
+    feature to each packet record. The design follows the general use of
+    multi-kernel convolution for sequence classification \cite{Kim2014CNN}.
+
+    \item \textbf{LSTM and BiLSTM.} Two-layer recurrent encoders with hidden
+    width 128 and mean pooling provide unidirectional and bidirectional
+    sequence references. The LSTM-with-time variant concatenates the stored
+    log inter-arrival value to each packet vector
+    \cite{Hochreiter1997LSTM}.
+
+    \item \textbf{GRU.} A two-layer, width-128 GRU with mean pooling tests
+    whether a lighter gated recurrent encoder is sufficient
+    \cite{Cho2014GRU}.
+
+    \item \textbf{Standard Transformer.} This control has the same packet
+    projection and self-attention family as the proposed Stage~1 model but
+    uses conventional order encoding without the proposed cumulative-time
+    mechanism \cite{Vaswani2017}.
+\end{itemize}
+
+The recurrent and convolutional baselines use the same packet feature tensors,
+sequence masks, chronological split, focal objective, sampler, optimizer
+budget, validation-based checkpoint rule, and threshold-selection rule as the
+proposed model \emph{within the Stage~1 model-family benchmark}. In the current
+comparison trainer, every member of this benchmark, including the proposed
+encoding variants, is checkpointed by validation class-1 F1 and obtains its
+threshold from the validation precision-recall points. This shared rule makes
+the rows within that benchmark comparable. It differs from the standalone
+principal Stage~1 trainer described below, which checkpoints by validation
+PR-AUC. The two protocols are therefore kept in separate tables unless all
+models are rerun through one common trainer. Model capacity is not forced to be
+identical because doing so can make one architecture artificially weak;
+instead, trainable parameter count and runtime are reported next to predictive
+performance.
+
+\subsubsection{Stage~1 Ablations and Sensitivity Tests}
+\label{subsubsec:stage1_ablation_protocol}
+
+Four encoding variants isolate the contribution of order and elapsed time:
+(i) both positional and time-aware encoding, (ii) positional encoding only,
+(iii) time-aware encoding only, and (iv) neither encoding. These variants keep
+the packet features and Transformer capacity unchanged. Their comparison is
+particularly important because concatenating an interval value to a packet
+vector is not equivalent to using elapsed time as the coordinate of a
+sinusoidal sequence encoding.
+
+Flow-statistics integration is evaluated through the three schemes defined in
+Table~\ref{tab:stage1_fusion_variants}. Scheme A repeats flow statistics at
+every packet position, Scheme B excludes flow statistics, and Scheme C uses a
+separate flow branch with bounded token-FiLM conditioning. Scheme B is used
+for packet-encoder and truncation studies because it isolates sequence
+modelling from flow-statistics fusion. Scheme C is the principal complete
+Stage~1 model and supplies the embeddings used by Stage~2.
+
+Sequence-length sensitivity is measured with
+$L\in\{8,16,32,64,128,256\}$ under \texttt{head} selection. Selection-policy
+sensitivity fixes $L=128$ and compares \texttt{head},
+\texttt{head\_tail}, and deterministic \texttt{random} subsampling. All other
+settings remain unchanged. In particular, a new threshold is selected on the
+validation predictions of each trained variant; the test set is not searched
+for a favorable operating point.
+
+\subsubsection{Stage~2 Baselines and Context Ablations}
+\label{subsubsec:stage2_baseline_protocol}
+
+The proposed target-query gated attention model is compared with five controls:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{No-context MLP} classifies only the current Stage~1
+    embedding and therefore measures the gain attributable to historical
+    context.
+
+    \item \textbf{Vanilla Transformer} applies full self-attention to the same
+    context sequence and classifies its last valid token
+    \cite{Vaswani2017}.
+
+    \item \textbf{LSTM} and \textbf{GRU} replace attention with recurrent
+    context encoders while preserving the Stage~1 inputs, context window,
+    masks, and classifier protocol \cite{Hochreiter1997LSTM,Cho2014GRU}.
+
+    \item \textbf{CNN+LSTM} applies parallel temporal convolutions with kernel
+    sizes 3, 5, and 7 before a two-layer LSTM, combining local pattern
+    extraction with recurrent context modelling
+    \cite{Kim2014CNN,Hochreiter1997LSTM}.
+\end{itemize}
+
+For the architecture comparison, contextual baselines receive the same
+\texttt{source\_host} histories with $W=128$ and the current flow included as
+the last valid element. With the target included, the maximum historical
+capacity is $W-1=127$ flows. The no-context model receives the same target
+embedding but discards all preceding elements.
+
+Context-relation sensitivity fixes the proposed encoder and $W=128$, then
+changes only the eligibility relation among \texttt{time\_only},
+\texttt{source\_host}, \texttt{destination\_host}, and \texttt{endpoint}.
+Window-size sensitivity fixes \texttt{source\_host} and evaluates
+$W\in\{16,32,64,128,256\}$. For each context configuration, the dataset report
+records the minimum, median, mean, 95th percentile, and maximum number of valid
+elements. This reveals whether a nominally larger window actually supplies
+more history or is mostly padding for low-activity hosts.
+
+\section{Training, Model Selection, and Thresholding}
+\label{subsec:experimental_training_protocol}
+
+\subsubsection{Principal Training Configuration}
+\label{subsubsec:principal_training_config}
+
+The architecture and optimization settings follow
+Table~\ref{tab:principal_method_config}. The main values relevant to
+experimental replication are summarized in
+Table~\ref{tab:experimental_training_config}. AdamW is used in both stages to
+decouple weight decay from the adaptive gradient update
+\cite{Loshchilov2019AdamW}. Focal loss reduces the influence of easy examples
+from the majority class \cite{Lin2017FocalLoss}.
+
+\begin{table}[t]
+    \centering
+    \caption{Principal optimization configuration. Values changed in a named
+    ablation are the only exceptions.}
+    \label{tab:experimental_training_config}
+    \begin{tabular}{@{}p{3.0cm}p{4.6cm}p{5.7cm}@{}}
+        \toprule
+        Setting & Stage~1 & Stage~2 \\
+        \midrule
+        Architecture and input & Table~\ref{tab:principal_method_config} &
+        Table~\ref{tab:principal_method_config} \\
+        Batch size & 128 & 128 \\
+        Optimizer & AdamW & AdamW \\
+        Learning rate & $1\times10^{-4}$ & $3\times10^{-5}$ \\
+        Weight decay & $1\times10^{-4}$ & $3\times10^{-4}$ \\
+        Gradient clipping & Global norm 1.0 & Global norm 0.5 \\
+        Loss & Focal, $\gamma=1$ & Focal, $\gamma=1$ \\
+        Sampler target & 9\% class-1 examples & 5\% class-1 examples \\
+        Maximum epochs & 500 & 500 \\
+        Early-stopping patience & 25 epochs & 15 epochs \\
+        Checkpoint criterion & Validation PR-AUC & Validation PR-AUC \\
+        Random seed & 130 & 130 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The weighted sampler is used only to construct training mini-batches and draws
+with replacement. Validation, test, and embedding-export loaders are
+non-sampled and preserve one row per flow. This distinction prevents the
+sampler from duplicating flow embeddings or altering the empirical label
+distribution used for evaluation. Automatic mixed precision is enabled on
+CUDA. Stage~1 reduces the learning rate when validation PR-AUC plateaus;
+Stage~2 uses five warm-up epochs followed by cosine annealing.
+
+\subsubsection{Validation-Only Model Selection}
+\label{subsubsec:validation_only_selection}
+
+For every configuration, early stopping and checkpoint selection use only the
+validation partition. The standalone principal Stage~1 pipeline and the
+Stage~2 pipeline restore the checkpoint with the highest validation PR-AUC.
+PR-AUC is appropriate for these principal runs because it evaluates ranking
+quality across decision thresholds and is more informative than accuracy under
+strong class imbalance \cite{SaitoRehmsmeier2015}. As noted in
+Section~\ref{subsubsec:stage1_baselines}, the current Stage~1 model-family
+benchmark instead uses validation class-1 F1 for all rows. This difference is
+reported rather than hidden: comparisons are made within a common protocol,
+and a row from the PR-AUC-selected standalone run is not inserted into the
+class-1-F1-selected benchmark table. A unified confirmatory rerun should use
+validation PR-AUC for every model.
+
+Hyperparameters are selected in two phases. First, pilot experiments determine
+reasonable optimization ranges using training and validation data. Second,
+the chosen configuration is frozen before the confirmatory test run. When an
+ablation changes a structural factor, it receives the same optimization budget
+as the reference model; it is not tuned on the test result. All attempted
+configurations, including unsuccessful ones, should remain in the run manifest
+to make the extent of validation-set search transparent
+\cite{Pineau2021Reproducibility,Bouthillier2021Variance}.
+
+\subsubsection{Decision-Threshold Selection}
+\label{subsubsec:experimental_thresholding}
+
+Let $p_i$ denote the restored model's probability for class 1. A prediction at
+threshold $\tau$ is
+\begin{equation}
+    \widehat{y}_i(\tau)=\mathbb{I}[p_i\geq\tau].
+    \label{eq:experimental_decision_rule}
+\end{equation}
+The threshold is selected by maximizing validation class-1 F1:
+\begin{equation}
+    \tau^{*}=\arg\max_{\tau\in\mathcal{T}}
+    F_{1,1}^{\mathrm{val}}(\tau).
+    \label{eq:validation_threshold_selection}
+\end{equation}
+The standalone Stage~1 trainer searches
+$\mathcal{T}=\{0.100,0.101,\ldots,0.949\}$, whereas Stage~2 uses 199 evenly
+spaced values from 0.01 to 0.99. The Stage~1 model-family comparison trainer
+evaluates the exact score thresholds returned by the validation
+precision-recall curve. Although the candidate sets differ between experiment
+blocks, every selected threshold is based on validation predictions only and
+is frozen before test evaluation. ROC-AUC and PR-AUC do not depend on this
+threshold. A threshold optimized on test labels may be retained only as a
+clearly marked oracle diagnostic for measuring threshold-transfer gap; it is
+not an official result and must not be used in model comparisons.
+
+\section{Evaluation Metrics}
+\label{subsec:experimental_metrics}
+
+The implementation uses the metric definitions provided by scikit-learn
+\cite{Pedregosa2011ScikitLearn}. Label 1 is the alert-derived positive class and
+label 0 is the negative class. The confusion matrix is always reported in the
+following orientation:
+\begin{equation}
+    \mathbf{C}=
+    \begin{bmatrix}
+        \mathrm{TN} & \mathrm{FP}\\
+        \mathrm{FN} & \mathrm{TP}
+    \end{bmatrix},
+    \label{eq:experimental_confusion_matrix}
+\end{equation}
+where rows denote true labels and columns denote predicted labels. Stating the
+orientation prevents an ambiguity that is common when confusion matrices are
+copied between software packages.
+
+\subsubsection{Class-Wise and Macro-Averaged Measures}
+\label{subsubsec:macro_metrics}
+
+For class $c\in\{0,1\}$, precision, recall, and F1 are
+\begin{align}
+    P_c &= \frac{\mathrm{TP}_c}
+    {\mathrm{TP}_c+\mathrm{FP}_c}, \\
+    R_c &= \frac{\mathrm{TP}_c}
+    {\mathrm{TP}_c+\mathrm{FN}_c}, \\
+    F_{1,c} &= \frac{2P_cR_c}{P_c+R_c}.
+    \label{eq:classwise_metrics}
+\end{align}
+Undefined ratios are assigned zero, matching the implementation's
+\texttt{zero\_division=0} setting. The macro-averaged metrics are
+\begin{align}
+    P_{\mathrm{macro}} &= \frac{P_0+P_1}{2}, \\
+    R_{\mathrm{macro}} &= \frac{R_0+R_1}{2}, \\
+    F_{1,\mathrm{macro}} &= \frac{F_{1,0}+F_{1,1}}{2}.
+    \label{eq:experimental_macro_metrics}
+\end{align}
+
+Macro-F1 is the primary F1 reported in this thesis and is denoted simply as
+``F1'' in high-level result tables. It weights benign and positive classes
+equally despite their different frequencies. Macro-precision and macro-recall
+are the corresponding primary precision and recall measures. Because macro
+averaging can conceal which error type changed, $P_1$, $R_1$, and $F_{1,1}$
+are always reported alongside the macro values.
+
+Accuracy and weighted averages are included for completeness but are treated
+as secondary. On the raw dataset, an always-negative classifier would achieve
+approximately $96.055\%$ accuracy while obtaining zero positive recall. High
+accuracy or weighted F1 is therefore not sufficient evidence of an effective
+intrusion detector.
+
+\subsubsection{False-Positive Rate and Operational Error Counts}
+\label{subsubsec:fpr_metric}
+
+The false-positive rate is
+\begin{equation}
+    \mathrm{FPR}=\frac{\mathrm{FP}}{\mathrm{FP}+\mathrm{TN}},
+    \label{eq:false_positive_rate}
+\end{equation}
+and the false-negative rate is
+\begin{equation}
+    \mathrm{FNR}=\frac{\mathrm{FN}}{\mathrm{FN}+\mathrm{TP}}
+    =1-R_1.
+    \label{eq:false_negative_rate}
+\end{equation}
+FPR is emphasized because even a small rate can create a large alert volume in
+a high-throughput network. Each result table therefore reports both FPR and the
+absolute numbers of FP and FN. For a test partition containing $N_0$ benign
+flows, the expected number of false alerts at the evaluated operating point is
+$N_0\times\mathrm{FPR}$.
+
+\subsubsection{Threshold-Independent Ranking Measures}
+\label{subsubsec:ranking_metrics}
+
+ROC-AUC summarizes the true-positive rate as the false-positive rate varies
+over all score thresholds \cite{Fawcett2006ROC}. It measures ranking quality
+but can remain high when the negative class dominates. PR-AUC focuses on the
+positive class and is therefore given greater weight for this imbalanced
+dataset \cite{SaitoRehmsmeier2015}.
+
+The code field named \texttt{pr\_auc} is computed with scikit-learn's
+\texttt{average\_precision\_score}. It is therefore average precision (AP),
+not trapezoidal integration of linearly interpolated precision-recall points:
+\begin{equation}
+    \mathrm{AP}=\sum_{k}(R_k-R_{k-1})P_k,
+    \label{eq:average_precision}
+\end{equation}
+where $P_k$ and $R_k$ are the precision and recall at successive score
+thresholds. To remain consistent with the stored result files, this thesis
+uses the label ``PR-AUC (AP)'' on first mention and ``PR-AUC'' thereafter. A
+random ranking has expected AP close to the class-1 prevalence, so the observed
+value should be interpreted relative to the test partition's positive rate.
+
+\section{Statistical Reliability}
+\label{subsec:statistical_reliability}
+
+Neural results can vary with initialization and mini-batch order; a single
+best run can therefore overstate an architecture's advantage
+\cite{ReimersGurevych2017,Bouthillier2021Variance}. Existing exploratory
+sequence-length, packet-selection, context-relation, and context-window sweeps
+use seed 130 and are explicitly labelled as single-seed sensitivity analyses.
+The confirmatory Stage~1 and Stage~2 model comparisons are repeated with five
+seeds, $\{130,131,132,133,134\}$. Each seed uses the same immutable data split
+and hyperparameters. The results chapter reports mean and standard deviation
+for macro-F1, PR-AUC, ROC-AUC, FPR, and class-1 F1. This distinction preserves
+the useful completed sweeps without presenting one stochastic run as an
+estimate of training stability.
+
+Two complementary paired analyses are applied to the fixed test predictions.
+First, a stratified paired bootstrap draws, with replacement, the original
+number of class-0 and class-1 test indices. The same sampled indices are used
+for both models in every replicate. For metric $M$, replicate $b$ yields
+\begin{equation}
+    \Delta_b=M(\mathcal{S}_b,A)-M(\mathcal{S}_b,B).
+    \label{eq:paired_bootstrap_difference}
+\end{equation}
+With $B=1{,}000$ replicates, the 2.5th and 97.5th percentiles of
+$\{\Delta_b\}_{b=1}^{B}$ form a 95\% paired percentile interval
+\cite{EfronTibshirani1993Bootstrap}. This analysis is applied to macro-F1,
+PR-AUC, ROC-AUC, and FPR. It quantifies uncertainty conditional on the observed
+test flows; it does not measure cross-network generalization or replace the
+multi-seed analysis.
+
+Second, hard classification errors are compared with McNemar's test because
+the two models predict the same flows \cite{McNemar1947}. If $n_{01}$ is the
+number of flows classified correctly only by model A and $n_{10}$ is the
+number classified correctly only by model B, the continuity-corrected statistic
+is
+\begin{equation}
+    \chi^2=\frac{\left(|n_{01}-n_{10}|-1\right)^2}
+    {n_{01}+n_{10}}.
+    \label{eq:mcnemar_statistic}
+\end{equation}
+The significance level is $\alpha=0.05$. When several alternatives are tested
+against the proposed model, Holm's step-down procedure adjusts the resulting
+$p$-values to control family-wise error \cite{Holm1979}. Statistical
+significance is reported together with the observed metric difference and its
+confidence interval; a small $p$-value alone is not treated as evidence of a
+practically important gain.
+
+\section{Efficiency and Resource Measurement}
+\label{subsec:efficiency_protocol}
+
+Experiments are executed in Google Colaboratory Pro+ using a company-funded
+allocation of 600 compute units. Colab compute units represent an access and
+usage budget, not a fixed amount of GPU work, and Colab states that accelerator
+availability and runtime limits may change over time
+\cite{GoogleColabFAQ2026}. The allocation is therefore documented as a resource
+budget but is not used as an efficiency metric.
+
+The available accelerators are an NVIDIA T4 with 16~GB of memory or an NVIDIA
+L4 with 24~GB \cite{NVIDIAT4Datasheet,NVIDIAL4ProductBrief}. The exact GPU
+assigned to every run is captured from the live runtime. For each
+confirmatory seed, all models in a comparison block are run on the same GPU
+family. Exploratory predictive results produced on T4 and L4 may be retained
+when their hardware is disclosed, but paired significance claims require a
+hardware-matched rerun. Wall-clock times from T4 and L4 are never directly
+ranked. Every timed comparison block uses one GPU type with the same software
+environment, batch size, input manifest, and precision mode. If Colab
+reassigns a different accelerator, that run starts a separate timing block.
+Runs interrupted by runtime termination or resumed in a new virtual machine
+remain usable for predictive evaluation when the checkpoint is intact, but
+they are excluded from wall-clock efficiency comparisons unless all timed
+segments are explicitly recorded and summed.
+This constraint is necessary because accelerator type, CUDA kernels, library
+versions, and deterministic settings materially affect runtime
+\cite{Pineau2021Reproducibility}.
+
+\begin{table}[t]
+    \centering
+    \caption{Execution environment for the final experiments. Dynamic values
+    are copied from the runtime that produced each reported timing block.}
+    \label{tab:experimental_environment}
+    \begin{tabular}{@{}p{3.4cm}p{10.0cm}@{}}
+        \toprule
+        Component & Recorded environment \\
+        \midrule
+        Hosted platform & \ExpPlatform \\
+        Purchased allocation & \ExpComputeBudget \\
+        Accelerator & \ExpGPU \\
+        Host processor and RAM & \ExpCPU \\
+        Operating environment & \ExpOS \\
+        Learning software & \ExpSoftware \\
+        Traffic extractor & \ExpSuricata \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsubsection{Parameter Count and Model Size}
+\label{subsubsec:parameter_measurement}
+
+For a PyTorch model with parameter tensors $\{\theta_j\}$, total and trainable
+parameter counts are
+\begin{align}
+    N_{\mathrm{total}} &= \sum_j |\theta_j|, \\
+    N_{\mathrm{train}} &= \sum_{j:\,\theta_j\ \mathrm{trainable}}|\theta_j|.
+    \label{eq:parameter_counts}
+\end{align}
+The principal complexity column reports $N_{\mathrm{train}}$; total and
+non-trainable counts are retained in the run artifact. The approximate FP32
+parameter footprint is
+\begin{equation}
+    S_{\mathrm{FP32}}=\frac{4N_{\mathrm{total}}}{1024^2}\ \mathrm{MiB},
+    \label{eq:fp32_model_size}
+\end{equation}
+excluding optimizer states, activations, and input batches. Parameter count is
+reported separately for Stage~1 and Stage~2. The end-to-end hierarchy may also
+report their sum, but Stage~1 and Stage~2 training times must not be added to
+claim online latency because training is an offline operation.
+
+\subsubsection{Training Time}
+\label{subsubsec:training_time_measurement}
+
+Training time is measured with a monotonic wall-clock timer around the complete
+fit loop. It includes forward and backward passes, validation at the end of
+each epoch, validation-threshold search when enabled, checkpoint writing, and
+early stopping. It excludes PCAP extraction, CSV preprocessing, precomputed
+tensor construction, Stage~1 embedding export, and Stage~2 context-index
+construction. The number of completed epochs and average seconds per completed
+epoch are reported with total time, because early stopping can make two models
+with identical epoch budgets appear to have different computational cost.
+
+Stage~1 and Stage~2 times are compared only within their respective stage and
+accelerator block. The
+two fit loops perform different validation and artifact-writing work, so their
+absolute times do not represent a controlled cross-stage benchmark. On CUDA,
+device synchronization is performed at timing boundaries wherever asynchronous
+kernel execution could otherwise cause under-measurement.
+
+\subsubsection{Inference Time, Throughput, and Scope}
+\label{subsubsec:inference_time_measurement}
+
+Inference is executed with gradients disabled and the model in evaluation
+mode. The reported test inference time, $T_{\mathrm{test}}$, covers one full
+non-shuffled pass through the test DataLoader, including host-to-device
+transfer, forward computation, probability collection, and metric computation.
+CUDA is synchronized immediately before and after the timed call. From
+$N_{\mathrm{test}}$ evaluated flows, per-flow time and throughput are
+\begin{align}
+    t_{\mathrm{flow}} &= \frac{T_{\mathrm{test}}}{N_{\mathrm{test}}}, \\
+    Q &= \frac{N_{\mathrm{test}}}{T_{\mathrm{test}}}
+    \quad \text{flows per second}.
+    \label{eq:inference_efficiency}
+\end{align}
+
+The automated Stage~2 profile measures inference after embeddings and context
+indices have been constructed. It is therefore a \emph{model-evaluation}
+measurement, not end-to-end PCAP-to-alert latency. The results chapter must
+state this scope explicitly. If deployment latency is evaluated, extraction,
+preprocessing, Stage~1 inference, context lookup, Stage~2 inference, and output
+serialization are timed as separate components before reporting their sum.
+Single-pass wall-clock values are treated as descriptive measurements; timing
+noise should not be interpreted as a meaningful speed advantage when two
+values differ only marginally.
+
+\section{Implementation and Reproducibility}
+\label{subsec:experimental_reproducibility}
+
+The models are implemented in PyTorch \cite{Paszke2019PyTorch}, while
+preprocessing and reported
+classification metrics use scikit-learn
+\cite{Pedregosa2011ScikitLearn}. Randomness is controlled by setting the Python,
+NumPy, and PyTorch seeds. CUDA seeds are set for all devices,
+\texttt{cudnn.deterministic} is enabled,
+\texttt{cudnn.benchmark} is disabled, deterministic PyTorch algorithms are
+requested, and \texttt{CUBLAS\_WORKSPACE\_CONFIG} is fixed. DataLoader workers
+receive deterministic seeds derived from the loader generator.
+
+At the start of each Colab run, the experiment log records the accelerator
+name and memory, CPU model, available system RAM, Python version, PyTorch
+version, CUDA runtime, cuDNN version, and scikit-learn version. These values are
+captured from the active runtime rather than inferred from the Colab plan,
+because a paid plan does not guarantee one fixed VM configuration
+\cite{GoogleColabFAQ2026}.
+
+Each run directory stores at least the following artifacts:
+\begin{itemize}[leftmargin=*]
+    \item the resolved YAML configuration and random seed;
+    \item the split manifest, ordered flow identifiers, class counts, and
+    preprocessing metadata;
+    \item the selected feature lists and fitted preprocessing object;
+    \item the best checkpoint, monitored validation score, and epoch history;
+    \item validation and test probabilities, predicted labels, and selected
+    validation threshold;
+    \item the complete metric dictionary and confusion matrix;
+    \item parameter counts, completed epochs, training time, inference
+    profile, accelerator identity, GPU memory, and software versions; and
+    \item for Stage~2, the exact Stage~1 checkpoint identifier, embedding-file
+    checksums, context policy, relation, window size, and context-length
+    distribution.
+\end{itemize}
+
+Embedding export uses non-sampled loaders so that the weighted training sampler
+cannot create duplicate flows. Before Stage~2 training, exported metadata are
+checked for unique flow identifiers, aligned array lengths, legal split names,
+chronological order, and matching labels. These checks are part of the
+experimental protocol rather than optional debugging because an embedding
+misalignment can produce plausible but invalid performance.
+
+The run manifest also records source-code revision, configuration checksum,
+PCAP checksum, Suricata ruleset information, and custom extraction-plugin
+revision where organizational policy permits. These practices follow broader
+recommendations for transparent and reproducible machine-learning experiments
+\cite{Pineau2021Reproducibility}.
+
+\section{Result-Reporting Protocol}
+\label{subsec:result_reporting_protocol}
+
+The next chapter reports results in the same order as the experimental matrix.
+For every predictive comparison, the main table contains the number of test
+flows, macro-precision, macro-recall, macro-F1, class-1 precision, class-1
+recall, class-1 F1, ROC-AUC, PR-AUC (AP), FPR, threshold, and the complete
+confusion matrix. Efficiency tables add the accelerator type, trainable
+parameters, completed epochs, training time, inference time, milliseconds per
+flow, and flows per second.
+
+The following reporting rules are applied:
+\begin{enumerate}[leftmargin=*]
+    \item Macro-F1 is the primary ranking metric; PR-AUC and class-1 metrics
+    are used to interpret the ranking rather than to select a different winner
+    after observing the test set.
+    \item All decimal metrics are reported to four decimal places, thresholds
+    to at least three decimal places, and confusion-matrix entries as integer
+    counts.
+    \item The exact test sample count accompanies every table. Results from
+    different split manifests are not merged or compared by rank.
+    \item The threshold shown for a test result is the threshold selected on
+    validation predictions. Any test-oracle threshold is isolated in a
+    diagnostic table and labelled non-deployable.
+    \item The best value in a table is emphasized only among models evaluated
+    on the same manifest and protocol. Statistical uncertainty and absolute
+    effect size accompany claims of improvement.
+    \item Negative or mixed results are retained. For example, a method that
+    improves class-1 recall at the cost of FPR is described as an operational
+    trade-off rather than an unconditional improvement.
+\end{enumerate}
+
+\section{Validity Boundaries}
+\label{subsec:experimental_validity}
+
+The protocol supports a controlled comparison on a large, chronologically
+partitioned corporate capture, but it does not by itself establish universal
+generalization. The labels are derived from Suricata alerts and may contain
+false positives, false negatives, and rule-coverage bias. A single capture can
+also encode organization-specific hosts, services, attack prevalence, and
+collection conditions. The paired bootstrap quantifies uncertainty over the
+observed test flows, not uncertainty over future organizations or rulesets.
+
+Accordingly, conclusions are limited to the alert-derived binary detection task
+and feature set described in Section~\ref{sec:dataset_preprocessing}. External
+time-shifted or cross-network evaluation, when available, is reported separately
+without refitting the preprocessor or threshold. This conservative scope is
+consistent with warnings against treating closed-world NIDS benchmark accuracy
+as direct evidence of deployment readiness
+\cite{SommerPaxson2010,Arp2022DosDonts}.
+
+\section{Chapter Summary}
+\label{subsec:experimental_methodology_summary}
+
+The experimental design evaluates the hierarchy in two controlled steps. The
+first step tests packet-sequence, time-aware encoding, and flow-statistics
+fusion within individual flows. The second uses one frozen Stage~1 embedding
+set to test causal context selection and Stage~2 encoder alternatives. Model
+selection and thresholding are confined to the validation partition, while the
+chronologically latest flows form the held-out test set. Macro-F1 is the primary
+metric, PR-AUC (implemented as average precision) measures rare-class ranking,
+and FPR connects statistical performance to alert burden. Paired uncertainty
+analysis and efficiency profiling complete the protocol, ensuring that the
+results chapter can distinguish reliable architectural gains from threshold,
+manifest, or computational differences.

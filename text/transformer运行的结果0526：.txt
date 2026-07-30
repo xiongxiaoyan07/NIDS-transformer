@@ -1,0 +1,193 @@
+我的transformer运行的结果：
+1、既有position又有time 被编码，结果：[TEST] Full metrics: {'accuracy': 0.9763413057530704, 'macro_precision': 0.8018619248864489, 'macro_recall': 0.8923357210173213, 'macro_f1': 0.8405815806660546, 'weighted_precision': 0.9803466422558892, 'weighted_recall': 0.9763413057530704, 'weighted_f1': 0.9778818686183055, 'precision_label1': 0.6106194690265486, 'recall_label1': 0.8023255813953488, 'f1_label1': 0.6934673366834171, 'auc': 0.9586100216374142, 'per_class_f1': {'0': 0.9876958246486922, '1': 0.6934673366834171}, 'confusion_matrix': [[7345, 132], [51, 207]], 'num_classes': 2, 'num_samples': 7735, 'loss': 0.1956052176715914, 'threshold': 0.9000000000000002}
+2、既没有position也没有time被编码，结果：：[TEST] Full metrics: {'accuracy': 0.9741435035552682, 'macro_precision': 0.7871138818144573, 'macro_recall': 0.8930700141933972, 'macro_f1': 0.8309301443137447, 'weighted_precision': 0.9794727419579128, 'weighted_recall': 0.9741435035552682, 'weighted_f1': 0.9761552096831165, 'precision_label1': 0.5810055865921788, 'recall_label1': 0.8062015503875969, 'f1_label1': 0.6753246753246753, 'auc': 0.9680894795719794, 'per_class_f1': {'0': 0.986535613302814, '1': 0.6753246753246753}, 'confusion_matrix': [[7327, 150], [50, 208]], 'num_classes': 2, 'num_samples': 7735, 'loss': 0.23276805052579927, 'threshold': 0.9000000000000002} 
+3、只有position被编码，结果：[TEST] Full metrics: {'accuracy': 0.9693600517129929, 'macro_precision': 0.7598880151679704, 'macro_recall': 0.8962090980816624, 'macro_f1': 0.8121812838733136, 'weighted_precision': 0.9780011886597514, 'weighted_recall': 0.9693600517129929, 'weighted_f1': 0.9725365022219068, 'precision_label1': 0.5261845386533666, 'recall_label1': 0.8178294573643411, 'f1_label1': 0.6403641881638846, 'auc': 0.962244682141513, 'per_class_f1': {'0': 0.9839983795827426, '1': 0.6403641881638846}, 'confusion_matrix': [[7287, 190], [47, 211]], 'num_classes': 2, 'num_samples': 7735, 'loss': 0.183474487201734, 'threshold': 0.8500000000000002}
+4、只有time被编码，结果：[TEST] Full metrics: {'accuracy': 0.9769877181641887, 'macro_precision': 0.8073304092700708, 'macro_recall': 0.8870567414489706, 'macro_f1': 0.8421432915112363, 'weighted_precision': 0.9803429976168199, 'weighted_recall': 0.9769877181641887, 'weighted_f1': 0.9783080580530833, 'precision_label1': 0.6219512195121951, 'recall_label1': 0.7906976744186046, 'f1_label1': 0.6962457337883959, 'auc': 0.9635232801780759, 'per_class_f1': {'0': 0.9880408492340769, '1': 0.6962457337883959}, 'confusion_matrix': [[7353, 124], [54, 204]], 'num_classes': 2, 'num_samples': 7735, 'loss': 0.18133375387300144, 'threshold': 0.9000000000000002}
+（按理来说应该是同时有position和time的运行结果最好）详细解析结果。
+
+下面这套代码是一个**Stage1 流量检测模型训练框架**：把 packet CSV 和 flow CSV 读入，按 flow 聚合成定长 packet 序列，做特征预处理，预计算成 `.npz`，再送入 Time-Aware Transformer 做二分类。
+
+## 1. 整体数据流
+
+流程大致是：
+
+`CSV 原始数据`
+→ `data_io.py 清洗 + 每个 flow 截断 packet 序列`
+→ `pipeline.py 划分 train/val/test`
+→ `preprocessing.py 只在 train 上 fit 特征处理器`
+→ `data_io.py 预计算 x/time/mask/label/flow_feats`
+→ `dataset.py 读取 npz 成 Dataset`
+→ `model.py Stage1TimeAwareTransformer`
+→ `trainer.py 训练、验证、阈值搜索、测试、画图`
+
+## 2. data_io.py：读数据 + 生成张量
+
+`read_stage1_csvs()` 做了几件关键事情：
+
+它先读取 packet 和 flow 两个 CSV，清洗列名、去掉 `record_type`、替换无穷值，并过滤 `flow_id == 0`。之后会检查 packet 里必须有 `flow_id_col` 和 `packet_time_col`，flow 里必须有 `flow_id_col` 和 `label_col`。接着把 flow_id、label、timestamp 转成数值类型。最后它按 flow 对 packet 排序，并根据 `strategy` 截断到 `max_seq_len`，支持 `head`、`head_tail`、`random` 三种策略。
+
+`generate_and_save_stage1_tensors()` 是核心预计算函数。它会为每个 flow 构造：
+
+```text
+x:        [num_flows, max_seq_len, feature_dim]
+time:     [num_flows, max_seq_len]
+mask:     [num_flows, max_seq_len]
+labels:   [num_flows]
+flow_ids: [num_flows]
+flow_feats: 可选，方案C时使用
+```
+
+其中 `mask=True` 表示真实 packet，`False` 表示 padding。最终保存为 `.npz`，供 Dataset 快速加载。
+
+这里设计得比较合理，因为训练时不需要每个 epoch 重新做 pandas 处理和特征转换，速度会快很多。
+
+## 3. preprocessing.py：特征工程
+
+`Stage1Preprocessor` 负责 packet-level 和 flow-level 特征处理。它支持：
+
+数值特征、类别特征、二值特征；数值特征可以做 `log1p`、分位数裁剪、StandardScaler 或 RobustScaler；类别特征用 OneHotEncoder；而且所有 scaler、clip bounds、encoder 都只在训练集上 fit，验证集和测试集只 transform，这可以避免数据泄漏。
+
+数值处理顺序是：
+
+```text
+转 numeric
+→ inf 替换为 NaN
+→ 指定列 log1p
+→ NaN 填 0
+→ 使用训练集分位数边界裁剪
+→ scaler 标准化
+```
+
+这一点在 `_numeric_matrix()` 里实现得比较清楚。
+
+另外，它还会派生 `log_flow_iat_us`，把 packet 间隔时间做 `log1p`，作为普通 packet 数值特征使用。
+
+## 4. pipeline.py：组装 DataLoader
+
+`build_dataloaders()` 是整个数据管道入口。它负责读取 CSV、划分 train/val/test，或者使用外部测试集；然后只用训练集 fit `Stage1Preprocessor`；再分别生成 train、val、test 的 `.npz` 文件；最后包装成 `PrecomputedFlowDataset` 和 PyTorch `DataLoader`。
+
+你这里还加了 `WeightedRandomSampler`，它根据训练集标签频率计算 sample weight，让少数类在训练 batch 中更容易被采到。
+
+`custom_collate_fn()` 也很重要：因为有些模式没有 `flow_feats`，普通 `default_collate` 不能处理 `None`，所以你在没有 flow_feats 时把这个字段移除。
+
+## 5. dataset.py：读取预计算数据
+
+`PrecomputedFlowDataset` 很简单，直接从 `.npz` 读出 `x/time/mask/labels/flow_ids`。如果 `.npz` 里有 `flow_feats`，就进入方案 C；否则就是方案 A 或 B。每个样本返回一个字典，字段包括 `x`、`time`、`mask`、`label`，以及可选的 `flow_feats`。
+
+## 6. model.py：Time-Aware Transformer
+
+模型结构是：
+
+```text
+packet/flow 输入特征
+→ RecordLevelProjection
+→ TimeAwareEncoding
+→ TransformerEncoder
+→ masked pooling / attention pooling
+→ 可选 flow feature fusion
+→ classifier
+```
+
+`RecordLevelProjection` 把原始输入维度投影到 `d_model`。如果配置了 MLP，就用 `build_mlp`；否则退化成普通 Linear。
+
+`TimeAwareEncoding` 是亮点。它不是简单的 `PE(pos) + MLP(time)`，而是把时间累积量 `p` 融入 sinusoidal encoding：
+
+```text
+TE(pos, 2j)   = sin((pos + p) / 10000^(2j/d_model))
+TE(pos, 2j+1) = cos((pos + p) / 10000^(2j/d_model))
+```
+
+其中 `p = log(1 + 累积 packet 间隔 + alpha)`。代码中先用 `expm1(time_log)` 从 `log1p(interval)` 反推原始间隔，再累积求和。
+
+模型支持三种 flow 特征融合方式：
+
+```text
+方案A：inject_to_packets=True
+把 flow 特征拼到每个 packet 上
+
+方案B：use_flow_features=False
+只用 packet 序列
+
+方案C：inject_to_packets=False 且 use_flow_features=True
+packet 经过 Transformer，flow 特征单独编码，再融合
+```
+
+方案 C 里 fusion 支持 `concat`、`gated`、`add` 三种方式。`gated` 会学习一个门控向量，在 packet 表示和 flow 表示之间动态加权。
+
+## 7. losses.py：不平衡分类损失
+
+你定义了普通 `FocalLoss` 和 `FocalLossWithLabelSmoothing`。训练时实际使用的是 `FocalLossWithLabelSmoothing`。它结合了：
+
+```text
+类别权重 alpha
++ focal weight
++ label smoothing
+```
+
+`compute_class_alpha()` 会根据类别分布计算权重，并对严重不平衡、中度不平衡、近似平衡分别使用不同策略。
+
+## 8. trainer.py：训练、验证、阈值搜索
+
+`train_model()` 做了完整训练流程：读取训练配置，计算类别不平衡比例，自动推荐或修正 `focal_gamma`，构造损失函数、AdamW、warmup + cosine 学习率调度器，然后按 epoch 训练和验证。它会根据配置的 monitor metric 保存 best checkpoint，并支持 early stopping。
+
+每个 batch 的训练过程是：
+
+```text
+x/time/mask/label/flow_feats
+→ model(...)
+→ criterion(logits, y)
+→ backward
+→ gradient clipping
+→ optimizer.step()
+```
+
+这里用了 `clip_grad_norm_(..., max_norm=1.0)`，对 Transformer 训练稳定性有帮助。
+
+训练结束后，你没有直接用 argmax 测试，而是在验证集上搜索 class 1 的最优阈值，从 `0.1` 到 `0.95` 每 `0.05` 搜一次，按 F1 选最优阈值，再用这个阈值评估测试集。
+
+## 9. 我看到的几个潜在问题
+
+第一，`data_io.py` 里有一行：
+
+```python
+from scipy.signal import max_len_seq
+```
+
+这个导入看起来不对，`scipy.signal` 通常没有 `max_len_seq`。而且代码里没有使用它，建议删除。
+
+第二，`read_stage1_csvs()` 里这段逻辑：
+
+```python
+flow_ids = set(flows[flow_id_col].unique().tolist())
+packets = packets[packets[flow_id_col].isin(flow_ids)].copy()
+flows = flows[flows[flow_id_col].isin(flow_ids)].copy()
+```
+
+第二行对 `flows` 自己过滤自己，实际没有意义。注释里原本似乎想保留 packet 和 flow 两边都存在的 flow_id。更严谨应该是取交集：
+
+```python
+packet_ids = set(packets[flow_id_col].unique())
+flow_ids = set(flows[flow_id_col].unique())
+common_ids = packet_ids & flow_ids
+packets = packets[packets[flow_id_col].isin(common_ids)].copy()
+flows = flows[flows[flow_id_col].isin(common_ids)].copy()
+```
+
+第三，`generate_and_save_stage1_tensors()` 里如果某个 flow 没有 packet，会保留全 0 的 x/time/mask，但 label 仍然存在。这不一定错，但模型看到的是空序列，建议统计并决定是否丢弃这些 flow。
+
+第四，`WeightedRandomSampler` 已经让训练采样趋于平衡，同时 loss 又用了 class alpha 和 focal loss。三者叠加可能会过度偏向少数类，导致 false positive 增加。建议做消融实验：
+
+```text
+A: sampler only
+B: focal only
+C: sampler + focal
+D: sampler + focal + label smoothing
+```
+
+第五，`find_optimal_threshold()` 用验证集选阈值是合理的，但如果验证集很小，阈值会不稳定。可以考虑保存 PR 曲线，或者按业务目标固定 recall/precision。
+
+## 10. 总体评价
+
+这份代码整体结构是清晰的：数据处理、预处理、Dataset、模型、训练逻辑分层明确。最核心的设计是**把网络流建模成 packet 序列**，再用**时间感知 Transformer**学习流内部 packet 的时序行为，同时支持 flow 统计特征的三种融合模式。整体更像一个“packet sequence + flow statistics”的混合检测框架。
+
+

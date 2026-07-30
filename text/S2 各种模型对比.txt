@@ -1,0 +1,30 @@
+S2 各种模型对比
+non-context:
+params_total: 514
+test_seconds_per_sample: 0.0001811978512206705
+test: loss=0.024987, acc=0.982543, macro_precision=0.881983, macro_recall=0.907744, macro_f1=0.894396, weighted_precision=0.983195, weighted_recall=0.982543, weighted_f1=0.982828, auc=0.9894142355333573, pr_auc=0.8786064196071548, precision_label1=0.7715574422923852, recall_label1=0.8261363636363637, f1_label1=0.7979146659349705, cm=[[79999, 861], [612, 2908]]
+
+LSTM：
+params_total: 922626
+test_seconds_per_sample: 0.0003463923777079853
+test: loss=0.021092, acc=0.984878, macro_precision=0.894613, macro_recall=0.924315, macro_f1=0.908866, weighted_precision=0.985532, weighted_recall=0.984878, weighted_f1=0.985152, auc=0.9933858798456366, pr_auc=0.9132591902711918, precision_label1=0.7954186413902053, recall_label1=0.8582386363636364, f1_label1=0.8256354195135283, cm=[[80083, 777], [499, 3021]]
+
+GRU：
+params_total: 692226
+test_seconds_per_sample: 0.00034020485910168734
+test: loss=0.020575, acc=0.985672, macro_precision=0.913832, macro_recall=0.905165, macro_f1=0.909448, weighted_precision=0.985529, weighted_recall=0.985672, weighted_f1=0.985596, auc=0.9933378134626627, pr_auc=0.9140912641219764, precision_label1=0.8356084809758931, recall_label1=0.8173295454545455, f1_label1=0.8263679448513572, cm=[[80294, 566], [643, 2877]]
+
+CNN-LSTM：
+params_total: 1218306
+test_seconds_per_sample: 0.0003584734180255668
+test: loss=0.021654, acc=0.985612, macro_precision=0.919175, macro_recall=0.900603, macro_f1=0.909657, weighted_precision=0.985328, weighted_recall=0.985612, weighted_f1=0.985449, auc=0.990027257311198, pr_auc=0.9050362596932977, precision_label1=0.8468731735827002, recall_label1=0.8076923076923077, f1_label1=0.8268188302425107, cm=[[80346,   514],[  677,  2843]]
+
+vanilla Transformer:
+params_total: 132994
+test_seconds_per_sample: 0.00019674967046693202
+test: loss=0.020623, acc=0.985068, macro_precision=0.907818, macro_recall=0.904714, macro_f1=0.906259, weighted_precision=0.985012, weighted_recall=0.985068, weighted_f1=0.985039, auc=0.9931356173970725, pr_auc=0.9072855920250074, precision_label1=0.8235967926689576, recall_label1=0.8170454545454545, f1_label1=0.8203080433542499, cm=[[80244, 616], [644, 2876]]
+
+我的模型：
+params_total: 283522
+test_seconds_per_sample: 0.00019650210508413672
+test: loss=0.019559, acc=0.988552, macro_precision=0.932788, macro_recall=0.922427, macro_f1=0.927539, weighted_precision=0.988425, weighted_recall=0.988552, weighted_f1=0.988482, auc=0.993827886090999, pr_auc=0.934499456433569, precision_label1=0.872086247086247, recall_label1=0.850284090909091, f1_label1=0.8610471806674338, cm=[[80421, 439], [527, 2993]]

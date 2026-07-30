@@ -1,0 +1,2 @@
+时间编码如何与 token 融合
+这个time-aware 是参考Network intrusion detection based on n-gram frequency and time-aware transformer这篇文章

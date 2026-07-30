@@ -1,0 +1,10 @@
+S2 Context method
+Stage2,其余配置都一样，只是context:下的method: 不一样
+method = srouce_host 运行结果：test: loss=0.019559, acc=0.988552, macro_precision=0.932788, macro_recall=0.922427, macro_f1=0.927539, weighted_precision=0.988425, weighted_recall=0.988552, weighted_f1=0.988482, auc=0.993827886090999, pr_auc=0.934499456433569, precision_label1=0.872086247086247, recall_label1=0.850284090909091, f1_label1=0.8610471806674338, cm=[[80421, 439], [527, 2993]]
+
+method = destination_host 运行结果：test: loss=0.020364, acc=0.987106, macro_precision=0.918267, macro_recall=0.920994, macro_f1=0.919625, weighted_precision=0.987149, weighted_recall=0.987106, weighted_f1=0.987127, auc=0.9935290144441571, pr_auc=0.9261714364906419, precision_label1=0.8431151241534989, recall_label1=0.8488636363636364, f1_label1=0.8459796149490374, cm=[[80304, 556], [532, 2988]]
+
+method = time_only 运行结果：test: loss=0.020335, acc=0.987461, macro_precision=0.928200, macro_recall=0.912348, macro_f1=0.920109, weighted_precision=0.987254, weighted_recall=0.987461, weighted_f1=0.987343, auc=0.9922409629157017, pr_auc=0.9215432131808575, precision_label1=0.8637706855791962, recall_label1=0.8303977272727273, f1_label1=0.84675550405562, cm=[[80399, 461], [597, 2923]]
+
+method = endpoint 运行结果：test: loss=0.018487, acc=0.986928, macro_precision=0.905650, macro_recall=0.938699, macro_f1=0.921457, weighted_precision=0.987566, weighted_recall=0.986928, weighted_f1=0.987184, auc=0.9935241080262182, pr_auc=0.9287117262713892, precision_label1=0.8162784611358284, recall_label1=0.8860795454545455, f1_label1=0.8497479907369568, cm=[[80158, 702], [401, 3119]]
+不同配置下的运行结果。详细解析结果（主要关注macro_f1、macro_recall、macro_precision、pr_auc、auc、confusion_matrix和FPR这些metrics，并从这些数据进行分析）

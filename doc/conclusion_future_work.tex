@@ -1,0 +1,261 @@
+% Conclusion chapter for:
+% A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection
+%
+% The chapter number is assigned automatically by LaTeX. When this file follows
+% Chapter 8 in the thesis, it will be rendered as Chapter 9.
+
+\chapter{Conclusion and Future Work}
+\label{sec:conclusion_future_work}
+
+This thesis investigated whether network intrusion detection can benefit from
+preserving two forms of structure that are commonly weakened by flow-level
+aggregation: the temporal organization of packets within a flow and the causal
+relationships among flows. To address this question, the study developed and
+evaluated a hierarchical, payload-independent detection framework. Stage~1
+learns an intra-flow representation from ordered packet metadata, explicit
+elapsed-time information, and aggregate flow statistics. Stage~2 then refines
+the decision by attending to earlier flows selected through a specified network
+relation. The resulting design separates representation learning from
+contextual reasoning, allowing the contribution of each stage to be evaluated
+under controlled comparisons.
+
+The experiments provide consistent evidence for the central thesis: preserving
+temporal and hierarchical traffic structure improves minority-class detection
+without requiring direct payload bytes. This conclusion is supported not only
+by accuracy or ROC-AUC, which can be optimistic under class imbalance, but also
+by macro-F1, macro-precision, macro-recall, attack-class F1, PR-AUC, false
+positives, false negatives, and FPR. At the same time, the conclusions remain
+bounded by the organizational capture, binary label construction, and
+single-seed evidence described in Chapters~\ref{sec:dataset_preprocessing},
+\ref{sec:experimental_methodology}, and~\ref{sec:results}.
+
+\section{Answers to the Research Questions}
+\label{subsec:conclusion_rq_answers}
+
+\paragraph{RQ1: Does time-aware packet-sequence modelling produce more
+informative representations than flow-level aggregation?}
+The controlled Stage~1 experiments support an affirmative answer. On the
+35,410-flow test manifest, the Transformer using both packet position and
+cumulative time achieved macro-F1 $0.8882$ and PR-AUC $0.8564$, compared with
+$0.7762$ and $0.5604$, respectively, for the flow-statistics MLP. The sequence
+model also reduced FP from 853 to 296 and FN from 501 to 306, lowering FPR from
+$2.5086\%$ to $0.8705\%$. Removing either positional or temporal encoding
+reduced macro-F1, macro-recall, and attack-class F1, showing that packet order
+and elapsed time provide complementary rather than interchangeable evidence.
+
+The fusion study further showed that packet and flow views are most useful when
+they interact in a controlled manner. Scheme~C, which applies bounded
+flow-conditioned token modulation before Transformer encoding and retains late
+fusion, reached macro-F1 $0.8955$ and PR-AUC $0.8763$ on the same controlled
+manifest. The sequence-length and selection studies qualified this result:
+$L=128$ with deterministic head selection produced the strongest overall error
+balance, whereas increasing the packet budget to 256 did not improve
+performance. Thus, the answer to RQ1 is not simply that longer sequences are
+better; rather, an appropriate packet horizon, explicit time, packet order, and
+flow-level conditioning jointly produce the most informative representation.
+
+\paragraph{RQ2: Does causal cross-flow context improve detection beyond
+independent per-flow classification?}
+The Stage~2 experiments also support an affirmative answer. On the common
+84,380-flow test manifest, the independent Scheme~C classifier achieved
+macro-F1 $0.8954$, PR-AUC $0.8763$, and FPR $0.8249\%$. Adding causal
+source-host context increased macro-F1 to $0.9275$ and PR-AUC to $0.9345$ while
+reducing FPR to $0.5429\%$. In absolute terms, FP decreased from 667 to 439 and
+FN from 732 to 527. Because both error types declined on the same test flows,
+the improvement cannot be explained only as a threshold-dependent exchange
+between precision and recall.
+
+Source-host context with a 128-flow window provided the best balanced operating
+point among the tested relation and window definitions. Endpoint context
+offered higher attack recall at the cost of more false alarms, indicating that
+the preferred relation may depend on operational priorities. The proposed
+target-query gated attention model also exceeded the no-context, vanilla
+Transformer, LSTM, GRU, and CNN--LSTM controls in macro-F1 and PR-AUC. These
+findings show that useful intrusion evidence can be distributed across related
+flows and that relation-specific, causal context is more effective than treating
+each flow independently.
+
+\section{Principal Contributions}
+\label{subsec:conclusion_contributions}
+
+The thesis makes the following contributions.
+
+\begin{enumerate}
+    \item It establishes an end-to-end, payload-independent data path from PCAP
+    capture through a custom Suricata output module to aligned packet- and
+    flow-level records. The construction preserves packet order, direction,
+    timing, flow identity, and aggregate statistics required by the two-stage
+    model.
+
+    \item It introduces a Stage~1 representation that combines explicit
+    cumulative-time encoding, conventional packet-position encoding,
+    mask-aware Transformer processing, hybrid pooling, and bounded
+    flow-conditioned token modulation. The accompanying ablations distinguish
+    the effects of temporal information, packet order, statistical fusion,
+    sequence length, and packet selection.
+
+    \item It introduces a causal Stage~2 mechanism in which the target flow
+    queries a relation-specific history through gated multi-head attention.
+    This formulation supports time-only, source-host, destination-host, and
+    endpoint contexts while preventing future-flow information from entering
+    the current prediction.
+
+    \item It provides an imbalance-aware evaluation that treats macro-F1 and
+    PR-AUC as primary outcomes and interprets them jointly with class-1
+    performance, confusion matrices, and FPR. Test-manifest boundaries and
+    validation-selected thresholds are kept explicit so that only controlled
+    results are compared directly.
+\end{enumerate}
+
+Together, these contributions are more than an application of a Transformer to
+tabular network data. They define and test a hierarchical representation of
+traffic in which packet dynamics explain individual flows and prior related
+flows provide decision context.
+
+\section{Limitations and Scope of the Conclusions}
+\label{subsec:conclusion_limitations}
+
+The validity boundaries have been discussed alongside the experimental results;
+only those that materially constrain the final claims are summarized here. The
+dataset originates from one organizational PCAP capture and uses alert-derived
+binary labels. Consequently, the experiments demonstrate effectiveness on the
+observed environment but do not yet establish generalization across networks,
+time periods, capture tools, attack families, or labeling policies. The model
+uses no direct payload bytes, but this alone does not prove robustness across
+all encrypted protocols or previously unseen attacks.
+
+Most neural experiments were conducted with one random seed. Large performance
+gaps provide useful empirical evidence, whereas small differences between
+nearby configurations should remain descriptive until repeated runs and paired
+uncertainty estimates are available. In addition, Stage~1 and Stage~2 were
+trained sequentially using frozen exported embeddings; this improves
+experimental separation but may prevent end-to-end optimization of the final
+detection objective. Finally, the reported Stage~2 latency covers model
+evaluation after embeddings and context indices are available. It is therefore
+not an end-to-end measurement from PCAP ingestion to alert generation, and the
+current study does not quantify production memory use, tail latency, or concept
+drift.
+
+\section{Future Work}
+\label{subsec:conclusion_future_work}
+
+The empirical findings motivate two principal methodological extensions:
+resource-efficient pre-training for Stage~1 and attack-adaptive,
+relation-aware context modelling for Stage~2. These directions should be
+developed together with stronger validation rather than being assessed only by
+additional single-run improvements.
+
+\subsection{Resource-Efficient Self-Supervised Pre-Training}
+\label{subsubsec:future_pretraining}
+
+The current Stage~1 encoder is trained from supervised binary labels. This is
+practical for the available experiment, but it limits representation learning
+to the information exposed by a relatively small set of alert-derived labels.
+Resource constraints prevented large-scale pre-training in the present study.
+A primary direction for future work is therefore to pre-train the Stage~1
+encoder on a larger collection of unlabeled packet and flow records before
+fine-tuning it for intrusion detection. Self-supervised traffic pre-training has
+the potential to learn reusable structural representations without requiring
+payload inspection or a label for every flow
+\cite{2024MAETraffic,Dong2025PretrainingEncrypted}.
+
+Several pre-training objectives are compatible with the current feature space.
+Masked packet-feature modelling could reconstruct selected header, direction,
+length, and timing attributes. Predictive objectives could estimate the next
+packet's direction, discretized length, or log inter-arrival time. Temporal-order
+verification could distinguish correctly ordered packet sequences from
+perturbed sequences, while contrastive learning could align two valid
+subsequences or augmented views of the same flow. Identity-like fields such as
+raw IP addresses and ports should be removed or carefully randomized during
+these tasks so that the encoder learns traffic behaviour rather than memorizing
+hosts.
+
+Pre-training does not eliminate computational cost; it moves additional cost to
+an offline representation-learning phase. For this reason, future experiments
+should investigate mixed-precision training, gradient accumulation, moderate
+sequence lengths, parameter sharing, and progressive training on increasingly
+large traffic samples. Downstream evaluation should compare random
+initialization, frozen-encoder linear probing, partial fine-tuning, and full
+fine-tuning under equal labelled-data budgets. The key question is not only
+whether pre-training raises in-domain macro-F1, but whether it improves label
+efficiency, rare-attack detection, convergence speed, and transfer to later or
+external captures.
+
+\subsection{Attack-Adaptive Relation-Aware Context Modelling}
+\label{subsubsec:future_relation_aware_context}
+
+The Stage~2 experiments show that context quality depends on how related flows
+are defined. Source-host context provides the best aggregate error balance,
+whereas endpoint context produces higher attack recall with more false
+positives. This suggests that no single relation is necessarily optimal for all
+attack mechanisms. Scanning may be represented by one source contacting many
+destinations, distributed denial-of-service activity by many sources contacting
+one destination, brute-force behaviour by repeated service interactions, and
+lateral movement by a chain of temporally connected endpoints. Future Stage~2
+models should therefore select context according to the target flow and the
+behaviour being modelled rather than relying on one globally fixed relation.
+
+A relation-aware Transformer could construct one causal context pool containing
+source-host, destination-host, endpoint, protocol, service, subnet, and
+time-neighbour relations. Each context item would receive a learned relation
+embedding or relation-specific attention bias. Alternatively, separate
+key--value projections could be learned for each relation and combined through
+a target-conditioned gate. In either design, only flows that finish before the
+target begins should remain eligible, preserving the causal constraint of the
+current system. The context horizon could also be adaptive: a model could choose
+between a time-duration window and a flow-count window according to recent
+traffic density.
+
+Evaluation of this extension requires attack-family labels or a defensible
+behavioural grouping in addition to the current binary target. Results should
+report per-family relation weights, recall, FPR, and confusion patterns to test
+whether different attacks actually use different contexts. Comparisons must
+include the current single-relation model, a relation-agnostic Transformer, and
+parameter-matched multi-relation controls. Host identifiers should be masked in
+cross-time and cross-site tests so that relation-aware attention cannot obtain
+its apparent gain by memorizing machines associated with historical alerts.
+Relation weights may help analysis, but they should not be treated as causal
+explanations without relation ablation and counterfactual context removal.
+
+\subsection{Statistical and External Validation}
+\label{subsubsec:future_validation}
+
+The principal Stage~1 and Stage~2 comparisons should be repeated with at least
+three to five random seeds. Each run should archive the configuration,
+validation-selected threshold, checkpoint, test labels, probabilities, and
+predictions. These aligned outputs would support confidence intervals, paired
+bootstrap comparisons, McNemar tests, calibration analysis, and genuine
+precision--recall curves. The models should then be evaluated on
+chronologically later captures, unseen hosts, public benchmarks, and, where
+governance permits, other organizational networks. This would distinguish
+in-domain performance from temporal, cross-site, and attack-family transfer.
+
+\subsection{Streaming Deployment, Efficiency, and Robustness}
+\label{subsubsec:future_streaming_deployment}
+
+The causal formulation is compatible with online inference, but a streaming
+implementation remains to be validated. Future work should maintain bounded
+per-relation buffers, evict expired flows, handle out-of-order records, and
+define behaviour under packet loss, timestamp noise, feature missingness, NAT,
+and highly shared servers. Evaluation should cover the full path from PCAP
+processing and Suricata extraction through both model stages and alert
+generation. In addition to predictive performance, it should report throughput,
+peak memory, and median, 95th-percentile, and 99th-percentile latency under
+realistic load.
+
+\section{Closing Remarks}
+\label{subsec:conclusion_closing}
+
+The results of this thesis show that network traffic should not be treated only
+as independent rows of aggregate statistics. Packet-level timing and ordering
+carry information that is lost during aggregation, and related flows provide
+additional evidence that cannot be recovered from an isolated flow. A
+hierarchical model that preserves both structures achieved a better balance
+between detecting the positive class and controlling false alarms in the
+studied environment. The next step is therefore not merely to enlarge the
+model, but to verify this structural advantage across seeds, captures, and
+operational conditions. Resource-efficient pre-training can then strengthen the
+flow representation, while attack-adaptive relation-aware attention can extend
+context modelling beyond one fixed relation. Together, these directions provide
+a practical research path towards more transferable, context-aware, and
+payload-independent network intrusion detection.

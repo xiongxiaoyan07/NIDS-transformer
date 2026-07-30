@@ -1,0 +1,42 @@
+RQ1 核心四组实验
+
+这四组全部使用：
+
+flow_fusion:
+  enabled: false
+
+同时固定：
+
+相同 split
+相同 packet features
+相同序列长度
+相同 Transformer
+相同 pooling
+相同 classifier
+相同 loss
+相同 seed
+
+只改变编码：
+
+模型	Position	Time
+NoEncoding	false	false
+PositionOnly	true	false
+TimeOnly	false	true
+BothEncoding	true	true
+
+这是你最重要的一张消融表。
+
+为什么必须先 packet-only
+
+当前 flow features 中包含大量：
+
+flow_iat_mean
+flow_iat_std
+fwd_iat_mean
+bwd_iat_mean
+idle_mean
+active_mean
+
+如果在 time encoding 消融时仍使用 scheme C，那么“没有 time encoding”的模型依然从 flow statistics 获得了大量时间信息。
+
+最后即使结果没有差异，也不能说明时间编码没用，只能说明你在另一条支路把答案提前塞进去了。

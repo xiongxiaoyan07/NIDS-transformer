@@ -1,0 +1,36 @@
+八、你现在可以直接照着改的目录
+
+我建议你把开题报告改成这个目录：
+
+Introduction
+
+Background and Related Work
+2.1 Signature-based and traditional learning-based NIDS
+2.2 Packet-level and payload-level deep learning
+2.3 Transformer-based traffic modeling
+2.4 Graph-based intrusion detection
+2.5 Self-supervised traffic representation learning
+2.6 Research gap
+
+Research Questions and Hypotheses
+
+Proposed Method
+4.1 Data pipeline from PCAP to packets and flows
+4.2 Protocol-aware packet representation
+4.3 Time-aware intra-flow Transformer
+4.4 Behavior-semantic inter-flow graph construction
+4.5 BS-GAT for relational intrusion detection
+
+Datasets and Labeling Strategy
+
+Evaluation Protocol
+
+Feasibility, Risks, and Ethical Considerations
+
+Work Plan / Timeline
+
+Expected Contributions
+
+References
+
+这个结构已经很像一份 A-level proposal 了。
