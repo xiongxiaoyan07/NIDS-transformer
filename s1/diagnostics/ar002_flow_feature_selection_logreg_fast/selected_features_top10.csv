@@ -1,0 +1,11 @@
+rank_in_set,feature
+1,syn_flag_count
+2,init_win_bytes_forward
+3,bwd_header_length
+4,fwd_header_length
+5,bwd_packet_length_max
+6,init_win_bytes_backward
+7,bwd_packet_length_std
+8,avg_bwd_segment_size
+9,total_backward_packets
+10,total_length_of_bwd_packets

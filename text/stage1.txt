@@ -1,0 +1,873 @@
+## 📊 **数据处理流程详细解析**
+
+你的代码实现了一个完整的**网络流量分类**数据处理流水线。让我详细解析每个步骤。
+
+---
+
+## 一、整体数据流程图
+
+```
+CSV文件输入 → 数据清洗 → 包截断 → 特征工程 → 张量化 → 数据集构建 → DataLoader
+```
+
+---
+
+## 二、各阶段详解
+
+### 🔹 **阶段1: 数据读取与清洗** (`data_io.py`)
+
+```python
+read_stage1_csvs(packet_csv, flow_csv, ...)
+```
+
+**输入:**
+
+* `stage1_packets.csv`: 包级数据（每个包一行）
+* `stage1_flows.csv`: 流级数据（每个流一行）
+
+**处理步骤:**
+
+1. **基础清洗** (`clean_dataframe`)
+
+   ```python
+   # 去除空格、删除record_type列、替换inf为NaN、过滤flow_id=0
+   df.columns = [str(c).strip() for c in df.columns]
+   df = df[df['flow_id'] != 0]
+   ```
+
+2. **类型转换**
+
+   ```python
+   # flow_id → int64, label → int, timestamp → int64
+   packets[flow_id_col] = pd.to_numeric(...)
+   ```
+
+3. **交叉验证ID**
+
+   ```python
+   # 只保留同时在packets和flows中存在的flow_id
+   flow_ids = set(flows[flow_id_col].unique())
+   packets = packets[packets[flow_id_col].isin(flow_ids)]
+   ```
+
+4. **包截断策略** (关键步骤)
+
+   ```python
+   # 对每个流，按time排序后截断到max_seq_len=40
+   for fid, group in packets.groupby(flow_id_col, sort=False):
+       df = group.sort_values(packet_time_col)
+       n = len(df)
+       
+       if strategy == "head":        # 取前40个包
+       if strategy == "head_tail":   # 取前20+后20
+       if strategy == "random":      # 随机选40个
+   ```
+
+**为什么这样做:**
+
+* 网络流可能有成千上万个包，模型需要固定长度输入
+* `head` 策略保留流的初始行为特征（如TCP握手）
+* `head_tail` 同时保留开头和结尾
+* `random` 提供随机采样，增强泛化性
+
+---
+
+### 🔹 **阶段2: 数据分层分割** (`splits.py`)
+
+```python
+stratified_train_val_test_split(flows, train_size=0.70, val_size=0.10, test_size=0.20)
+```
+
+**分割策略:**
+
+```python
+# 流级分割（不是包级），避免同一流的包分散在不同集合
+ids = df[flow_id_col].to_numpy()      # 获取所有流ID
+y = df[label_col].astype(int)         # 获取标签
+
+# 分层采样：保持train/val/test中类别比例一致
+train_val_ids, test_ids = train_test_split(
+    ids, y, test_size=0.20, stratify=y  # 保持标签分布
+)
+
+# 再次分层：从train_val中分出val
+train_ids, val_ids = train_test_split(
+    train_val_ids, train_val_y, test_size=0.10/(0.70+0.10), stratify=train_val_y
+)
+```
+
+**关键保证:**
+
+```python
+# 确保测试集至少包含一个正样本
+def _ensure_test_has_positive_if_possible(splits, df, ...):
+    test_has_positive = any(label==1 for fid in splits["test"])
+    if not test_has_positive:
+        # 从train/val中移动一个正样本到test
+```
+
+**分层结果示例:**
+
+```
+Train: 13511个流 (70%)  - 标签0: 6755, 标签1: 6756
+Val:   1930个流  (10%)  - 标签0: 965,  标签1: 965
+Test:  3860个流  (20%)  - 标签0: 1930, 标签1: 1930
+```
+
+---
+
+### 🔹 **阶段3: 特征工程** (`preprocessing.py`)
+
+这是最复杂的部分，分为三个特征组：
+
+#### **3.1 包级特征 (Packet Features)**
+
+从 `stage1_config.yaml` 配置：
+
+```yaml
+features:
+  packet:
+    categorical: [ip_version, protocol, l7_proto, icmp_type, icmp_code]
+    numerical: [pkt_len, ip_len, payload_len, ttl_or_hop_limit, tcp_window, ...]
+    binary: [direction, has_tcp, has_udp, has_icmp, tcp_fin, tcp_syn, ...]
+```
+
+**数值特征处理流水线:**
+
+```python
+def _numeric_matrix(self, df, cols, ...):
+    # 1. 转为数值，替换inf为NaN
+    x = df[cols].apply(pd.to_numeric, errors="coerce")
+    
+    # 2. log1p变换（处理重尾分布）
+    # 例如: pkt_len=1500 → log1p(1500)=7.31
+    # 这使大值变小，小值变化更明显
+    x = self._apply_log1p(x)  # 只对配置中列出的列
+    
+    # 3. 填充NaN为0
+    x = x.fillna(0.0)
+    
+    # 4. 分位数裁剪（去除异常值）
+    # 例如: clip_lower_quantile=0.001, clip_upper_quantile=0.999
+    # 将小于0.1%分位数和大于99.9%分位数的值裁剪
+    lower = values.quantile(0.001)
+    upper = values.quantile(0.999)
+    x = x.clip(lower=lower, upper=upper)
+    
+    # 5. 标准化 (StandardScaler)
+    # 只在训练集上fit，验证/测试集使用相同的参数
+    x = (x - mean) / std
+```
+
+**分类特征处理:**
+
+```python
+# One-Hot编码
+# ip_version=4 → [1,0]  (假设只有IPv4和IPv6)
+# protocol=6(TCP) → [1,0,0,...]
+# 使用训练集fit的编码器，避免数据泄露
+packet_ohe = OneHotEncoder(handle_unknown="ignore")
+```
+
+**二元特征处理:**
+
+```python
+# 不做任何变换，保持0/1
+# direction: 0=出站, 1=入站
+# has_tcp: 0=无TCP, 1=有TCP
+x = (x > 0).astype(np.float32)  # 确保是0或1
+```
+
+#### **3.2 流级特征 (Flow Features)**
+
+```yaml
+features:
+  flow:
+    numerical: [flow_duration, total_fwd_packets, ...]  # 50+个统计特征
+    binary: [has_init_win_bytes_forward, ...]
+```
+
+处理流程与包级相同，但应用到流级数据。
+
+#### **3.3 特征融合**
+
+```python
+# 在 generate_and_save_stage1_tensors 中
+# 每个包的最终特征 = 包特征 + 流特征（重复拼接）
+packet_x = preprocessor.transform_packets(pkt_df)    # [n_packets, 25]
+flow_x = preprocessor.transform_flows(flow_df)       # [1, 60]
+flow_x_tiled = np.repeat(flow_x, n_packets, axis=0)  # [n_packets, 60]
+x = np.concatenate([packet_x, flow_x_tiled], axis=1) # [n_packets, 85]
+```
+
+---
+
+### 🔹 **阶段4: 张量化** (`data_io.py` - `generate_and_save_stage1_tensors`)
+
+```python
+# 为每个流创建固定大小的张量
+x_tensor = np.zeros((num_flows, max_seq_len=40, feature_dim=85))
+time_tensor = np.zeros((num_flows, max_seq_len=40))
+mask_tensor = np.zeros((num_flows, max_seq_len=40), dtype=bool)
+labels = np.zeros((num_flows,))
+
+for idx, fid in enumerate(flow_ids):
+    # 1. 获取该流的所有包，按时间排序
+    pkt_df = packets[packets[flow_id_col] == fid].sort_values("timestamp_us")
+    
+    # 2. 提取特征（包级+流级拼接）
+    x = np.concatenate([packet_x, flow_x_tiled], axis=1)
+    
+    # 3. 时间特征：log1p(包间隔时间)
+    time_log = np.log1p(pkt_df["flow_iat_us"])
+    
+    # 4. 填充到固定长度，不足的部分用0填充，mask标记为False
+    real_len = min(len(pkt_df), max_seq_len)
+    x_tensor[idx, :real_len] = x[:real_len]
+    time_tensor[idx, :real_len] = time_log[:real_len]
+    mask_tensor[idx, :real_len] = True  # 真实包的位置
+    
+    # 5. 保存标签
+    labels[idx] = flow_rows[fid]["label"]
+```
+
+**最终数据结构:**
+
+```python
+# 每个样本是一个流，包含：
+{
+    "x":     torch.Size([40, 85]),   # 40个包，每个包85维特征
+    "time":  torch.Size([40]),       # 40个时间戳
+    "mask":  torch.Size([40]),       # 40个布尔掩码
+    "label": 0 or 1                  # 良性/恶意
+}
+```
+
+---
+
+### 🔹 **阶段5: 缓存机制**
+
+```python
+def get_or_generate_stage1_tensors(...):
+    # 检查是否已有预处理好的.npz文件
+    npz_path = f"seqLen40head{prefix}.npz"
+    if os.path.exists(npz_path):
+        return npz_path  # 直接返回缓存
+    
+    # 否则生成并保存
+    npz_path = generate_and_save_stage1_tensors(...)
+    return npz_path
+```
+
+**优点:**
+
+* 避免重复处理大量数据
+* 加速实验迭代
+
+---
+
+### 🔹 **阶段6: Dataset与DataLoader** (`pipeline.py`, `dataset.py`)
+
+```python
+# 创建数据集
+class PrecomputedFlowDataset(Dataset):
+    def __getitem__(self, index):
+        return {
+            "x": self.x_tensor[index],      # [40, 85]
+            "time": self.time_tensor[index], # [40]
+            "mask": self.mask_tensor[index], # [40]
+            "label": self.labels[index],     # scalar
+        }
+
+# 加权采样（处理轻微不平衡）
+class_counts = [13511, 13557]
+class_weights = 1.0 / class_counts  # [1/13511, 1/13557]
+sampler = WeightedRandomSampler(weights=class_weights, ...)
+```
+
+---
+
+## 三、数据流向完整示例
+
+```
+原始CSV:
+  packets.csv: 1,000,000行 × 20列
+  flows.csv:   50,000行 × 60列
+
+↓ read_stage1_csvs (清洗+截断)
+
+处理后DataFrame:
+  packets: 800,000行 (截断后) × 20列
+  flows:   27,068行 × 60列
+
+↓ stratified_train_val_test_split
+
+分割后:
+  train: 13,511 flows → 对应约400,000 packets
+  val:   1,930 flows  → 对应约55,000 packets
+  test:  7,735 flows  → 对应约220,000 packets
+
+↓ generate_and_save_stage1_tensors
+
+预计算张量 (.npz):
+  train.npz: (13511, 40, 85) float32 = ~180MB
+  val.npz:   (1930, 40, 85)  float32 = ~26MB
+  test.npz:  (7735, 40, 85)  float32 = ~103MB
+
+↓ DataLoader
+
+训练批次:
+  batch_size=64 → [64, 40, 85] tensors
+```
+
+---
+
+## 四、关键设计原则
+
+### ✅ **防止数据泄露**
+
+```python
+# 所有变换参数只在训练集上fit
+preprocessor.fit(train_packets, train_flows)
+
+# 验证/测试集使用相同的参数
+val_x = preprocessor.transform_packets(val_packets)  # 使用训练集的scaler
+```
+
+### ✅ **流级分割**
+
+```python
+# 确保同一流的所有包都在同一个集合中
+train_ids = set(splits["train"])  # 流ID集合
+train_packets = packets[packets[flow_id_col].isin(train_ids)]
+```
+
+### ✅ **处理可变长度**
+
+```python
+# 短流: zero-padding + mask
+real_len = 15  # 只有15个包
+x[15:40] = 0
+mask[15:40] = False
+
+# 长流: 截断策略
+if len > 40:
+    x = x[:40]  # head策略
+```
+
+---
+
+## 五、潜在改进点
+
+基于这个数据处理流程，你的Class 1 F1偏低可能与以下因素有关：
+
+1. **特征区分度**: 85维特征中可能有冗余或无信息特征
+2. **时序信息利用**: 仅使用`head`策略可能丢失关键包
+3. **统计特征**: 流级特征已经包含了统计信息，但可能不够精细
+4. **包间关系**: Transformer应该能捕捉，但需要足够的数据和模型容量
+
+建议在数据处理层面添加：
+
+* 包方向序列特征（dir_seq）
+* 滑动窗口统计（前N个包的统计）
+* 协议状态机特征（TCP状态转换）
+
+## 📊 完整训练流程深度解析
+
+让我系统地解析你的整个训练流水线，从模型创建到最终测试。
+
+---
+
+## 一、整体训练架构图
+
+```
+run_stage1.py (主入口)
+    │
+    ├── 1. 加载配置 (stage1_config.yaml)
+    ├── 2. 数据处理 (data_io.py, preprocessing.py)
+    ├── 3. 数据加载器 (pipeline.py)
+    ├── 4. 模型创建 (model.py)
+    ├── 5. 损失函数 (losses.py)
+    └── 6. 训练循环 (trainer.py)
+            │
+            ├── train_model()
+            │   ├── _train_one_epoch()  ← 训练一个epoch
+            │   ├── evaluate_model()    ← 验证
+            │   ├── find_optimal_threshold() ← 阈值搜索
+            │   └── 可视化 (confusion matrix, F1, curves)
+            │
+            └── 返回最佳模型和测试指标
+```
+
+---
+
+## 二、模型创建详解 (`model.py`)
+
+### 🔹 **架构总览**
+
+```
+输入: [B, 40, 85] 包序列
+  │
+  ├── RecordLevelProjection   [B, 40, 85] → [B, 40, 128]
+  │     └── build_mlp: Linear(85, 128)
+  │
+  ├── TimeAwareEncoding       [B, 40, 128] → [B, 40, 128]
+  │     ├── Positional Encoding (sinusoidal, 不可训练)
+  │     │     PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+  │     │     PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+  │     │
+  │     └── Time Encoding (可训练MLP)
+  │           time_mlp: log(1+iat) → Linear(1,128) → GELU → Linear(128,128)
+  │
+  ├── TransformerEncoder      [B, 40, 128] → [B, 40, 128]
+  │     ├── Layer 1: MultiHeadAttention(8 heads) + FFN(128→512→128)
+  │     ├── Layer 2: MultiHeadAttention(8 heads) + FFN(128→512→128)
+  │     └── Layer 3: MultiHeadAttention(8 heads) + FFN(128→512→128)
+  │     (使用 src_key_padding_mask 忽略padding位置)
+  │
+  ├── AttentionPooling        [B, 40, 128] → [B, 128]
+  │     └── 学习每个包的重要性权重，加权求和
+  │
+  └── Classifier              [B, 128] → [B, 2]
+        ├── LayerNorm(128)
+        ├── Linear(128, 128) + GELU + Dropout(0.1)
+        ├── Linear(128, 64)  + GELU + Dropout(0.06)
+        ├── Linear(64, 32)   + GELU + Dropout(0.04)
+        └── Linear(32, 2)
+```
+
+### 🔹 **关键组件详解**
+
+#### **1. RecordLevelProjection**
+
+```python
+class RecordLevelProjection(nn.Module):
+    def __init__(self, input_dim=85, d_model=128, dropout=0.2):
+        # 简单线性投影：85维 → 128维
+        self.proj = nn.Linear(85, 128)
+    
+    def forward(self, x):  # x: [B, 40, 85]
+        return self.proj(x)  # → [B, 40, 128]
+```
+
+#### **2. TimeAwareEncoding**
+
+```python
+class TimeAwareEncoding(nn.Module):
+    def forward(self, e, time_log):
+        # e: [B, 40, 128], time_log: [B, 40]
+        
+        # Step 1: 添加位置编码 (让模型知道包的顺序)
+        out = e + self.pe[:, :seq_len, :]  # sinusoidal PE
+        
+        # Step 2: 添加时间编码 (让模型知道包之间的时间间隔)
+        time_emb = self.time_mlp(time_log.unsqueeze(-1))  # [B, 40, 128]
+        out = out + time_emb
+        
+        return self.dropout(out)
+```
+
+**为什么需要时间编码？**
+
+* 攻击流量和正常流量的包间隔模式不同
+* 例如：DDoS攻击可能有非常均匀的包间隔
+
+#### **3. TransformerEncoder**
+
+```python
+# 配置: num_layers=3, nhead=8, d_model=128, dim_feedforward=512
+layer = nn.TransformerEncoderLayer(
+    d_model=128,
+    nhead=8,           # 8个注意力头，每个处理 128/8=16 维
+    dim_feedforward=512,  # FFN扩展比: 512/128=4x
+    dropout=0.2,
+    activation="gelu",
+    batch_first=True,
+    norm_first=True,   # Pre-LN: LayerNorm → Attention → Residual
+)
+
+self.encoder = nn.TransformerEncoder(layer, num_layers=3)
+```
+
+**Pre-LN vs Post-LN:**
+
+```
+Pre-LN (norm_first=True):   x + Attention(LN(x))     ← 更稳定
+Post-LN (norm_first=False): LN(x + Attention(x))     ← 传统方式
+```
+
+#### **4. AttentionPooling**
+
+```python
+class AttentionPooling(nn.Module):
+    def forward(self, h, mask):
+        # h: [B, 40, 128], mask: [B, 40]
+        
+        # 计算每个包的注意力分数
+        attn_weights = self.attention(h).squeeze(-1)  # [B, 40]
+        
+        # 将padding位置的分数设为极小值
+        attn_weights = attn_weights.masked_fill(~mask, -1e9)
+        
+        # Softmax归一化
+        attn_weights = torch.softmax(attn_weights, dim=-1)  # [B, 40]
+        
+        # 加权求和
+        z = (h * attn_weights.unsqueeze(-1)).sum(dim=1)  # [B, 128]
+        return z
+```
+
+**与平均池化的对比:**
+
+```python
+# 简单平均池化
+z_avg = h.sum(dim=1) / mask.sum(dim=1, keepdim=True)
+
+# 注意力池化 (当前使用)
+z_attn = attention_pool(h, mask)  # 模型学习哪些包更重要
+```
+
+---
+
+## 三、损失函数详解 (`losses.py`)
+
+### 🔹 **FocalLossWithLabelSmoothing**
+
+这是一个**三合一**的损失函数：
+
+```python
+class FocalLossWithLabelSmoothing(nn.Module):
+    """
+    结合三个技术：
+    1. Focal Loss: 关注困难样本
+    2. Label Smoothing: 防止过拟合
+    3. Class Weights (alpha): 处理类别不平衡
+    """
+    def forward(self, inputs, targets):
+        # inputs: [B, 2] (logits)
+        # targets: [B] (0 or 1)
+        
+        # Step 1: 计算softmax概率
+        probs = softmax(inputs)  # [B, 2]
+        
+        # Step 2: 获取真实类别的概率
+        probs_gt = probs[targets]  # [B]
+        
+        # Step 3: 计算focal weight
+        # 如果模型很自信 (probs_gt≈1)，权重≈0 → 降低简单样本的影响
+        # 如果模型不自信 (probs_gt≈0.5)，权重≈0.25 → 关注困难样本
+        focal_weight = (1 - probs_gt) ** gamma  # gamma=1.5
+        
+        # Step 4: 应用类别权重
+        # alpha = [0.5008, 0.4992] (因为数据几乎平衡)
+        focal_weight *= alpha[targets]
+        
+        # Step 5: 标签平滑交叉熵
+        # 原始标签: [0, 1] → 平滑后: [0.025, 0.975] (smoothing=0.05)
+        ce_loss = cross_entropy(inputs, targets, label_smoothing=0.05)
+        
+        # Step 6: 组合
+        loss = (focal_weight * ce_loss).mean()
+        return loss
+```
+
+**损失函数的数学形式:**
+
+```
+Loss = Σ (1 - p_t)^γ * α_t * CE(p_t, y_smoothed)
+
+其中:
+  p_t: 真实类别的预测概率
+  γ: focal参数 (1.5)
+  α_t: 类别权重 (≈0.5, 因数据平衡)
+  y_smoothed: 标签平滑后的目标
+```
+
+---
+
+## 四、训练循环详解 (`trainer.py`)
+
+### 🔹 **`train_model()` 完整流程**
+
+```python
+def train_model(model, loaders, cfg, out_dir, device):
+    # ============ 初始化 ============
+    # 1. 计算类别权重
+    train_labels = collect_train_labels(loaders["train"])  # [13511, 13557]
+    alpha = [0.5008, 0.4992]  # 几乎相等，数据平衡
+    
+    # 2. 创建损失函数
+    criterion = FocalLossWithLabelSmoothing(
+        alpha=alpha,          # 类别权重
+        gamma=1.5,            # focal gamma
+        label_smoothing=0.05  # 标签平滑
+    )
+    
+    # 3. 优化器
+    optimizer = AdamW(lr=0.0005, weight_decay=0.0001)
+    
+    # 4. 学习率调度器
+    scheduler = SequentialLR(
+        LinearLR(start_factor=0.1, total_iters=10),    # 预热10个epoch
+        CosineAnnealingLR(T_max=490, eta_min=5e-6)     # 余弦衰减
+    )
+    
+    # ============ 训练循环 ============
+    for epoch in range(1, 501):
+        # Step 1: 训练一个epoch
+        train_loss = _train_one_epoch(model, train_loader, optimizer, criterion)
+        
+        # Step 2: 更新学习率
+        scheduler.step()
+        
+        # Step 3: 验证
+        val_metrics = evaluate_model(model, val_loader, criterion)
+        
+        # Step 4: 检查是否是最佳模型
+        if val_metrics['f1_label1'] > best_score:
+            best_score = val_metrics['f1_label1']
+            torch.save(model.state_dict(), 'best_model.pt')
+        else:
+            # Early stopping (patience=30)
+            if no_improvement >= 30:
+                break
+    
+    # ============ 后处理 ============
+    # 1. 加载最佳模型
+    model.load_state_dict(best_checkpoint)
+    
+    # 2. 阈值搜索
+    best_threshold = find_optimal_threshold(model, val_loader)
+    # → 找到使F1最大的阈值: 0.70
+    
+    # 3. 测试集评估
+    test_metrics = evaluate_model(
+        model, test_loader, 
+        criterion=CrossEntropyLoss(),  # 使用标准CE评估
+        threshold=0.70                 # 使用最优阈值
+    )
+    
+    return test_metrics
+```
+
+### 🔹 **`_train_one_epoch()` 详解**
+
+```python
+def _train_one_epoch(model, loader, optimizer, criterion, device):
+    model.train()
+    total_loss = 0
+    
+    for batch in loader:  # batch = {x, time, mask, label}
+        # 1. 数据移到GPU
+        x    = batch["x"].to(device)     # [64, 40, 85]
+        t    = batch["time"].to(device)   # [64, 40]
+        mask = batch["mask"].to(device)   # [64, 40]
+        y    = batch["label"].to(device)  # [64]
+        
+        # 2. 前向传播
+        optimizer.zero_grad()
+        logits = model(x, t, mask)  # [64, 2]
+        
+        # 3. 计算损失
+        loss = criterion(logits, y)  # scalar
+        
+        # 4. 反向传播
+        loss.backward()
+        
+        # 5. 梯度裁剪 (防止梯度爆炸)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
+        # 6. 参数更新
+        optimizer.step()
+        
+        total_loss += loss * batch_size
+    
+    return total_loss / total_samples  # 平均损失
+```
+
+### 🔹 **`evaluate_model()` 详解**
+
+```python
+@torch.no_grad()
+def evaluate_model(model, loader, criterion, device, threshold=None):
+    model.eval()
+    
+    for batch in loader:
+        # 1. 前向传播
+        logits = model(x, t, mask)       # [64, 2]
+        probs = softmax(logits, dim=-1)  # [64, 2]
+        
+        # 2. 预测
+        if threshold is not None:
+            preds = (probs[:, 1] >= threshold).long()  # 自定义阈值
+        else:
+            preds = logits.argmax(dim=-1)               # 默认: 概率最大的类
+        
+        # 3. 收集结果
+        y_true.extend(y)           # 所有真实标签
+        y_pred.extend(preds)       # 所有预测标签
+        y_score.extend(probs[:,1]) # 类别1的预测概率
+    
+    # 4. 计算指标
+    metrics = classification_metrics(y_true, y_pred, y_score)
+    return metrics
+```
+
+### 🔹 **`find_optimal_threshold()` 详解**
+
+```python
+def find_optimal_threshold(model, val_loader, device):
+    # 1. 收集验证集的所有预测概率
+    y_scores = []  # 类别1的概率
+    y_true = []    # 真实标签
+    
+    # 2. 网格搜索
+    for threshold in [0.10, 0.15, 0.20, ..., 0.90]:
+        # 用当前阈值做预测
+        y_pred = (y_scores >= threshold).astype(int)
+        
+        # 计算F1
+        precision = TP / (TP + FP)
+        recall = TP / (TP + FN)
+        f1 = 2 * precision * recall / (precision + recall)
+        
+        # 记录结果
+    
+    # 3. 返回最佳阈值
+    return best_threshold  # 0.70
+```
+
+**阈值搜索可视化:**
+
+```
+F1 Score
+  0.68 |        *
+  0.66 |      *   *
+  0.64 |    *       *
+  0.62 |  *           *
+  0.60 |*               *
+       +--+--+--+--+--+--+--+--+
+      0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9
+                    ↑
+               最优阈值=0.70
+```
+
+---
+
+## 五、学习率调度策略
+
+```python
+# Warmup + Cosine Annealing
+epoch 1-10:  lr = 0.00005 → 0.0005  (线性增长)
+epoch 11-500: lr = 0.0005 → 0.000005 (余弦衰减)
+
+lr
+0.0005 |        /\
+       |       /  \
+       |      /    \
+       |     /      \___
+       |    /            \_____
+       |   /                    \___
+0.00005|__/                         \___
+       +---+---+---+---+---+---+---+--->
+       0   10  50  100 200 300 400 500 epoch
+```
+
+**为什么这样设计？**
+
+* **Warmup**: 避免训练初期梯度不稳定
+* **Cosine Annealing**: 周期性降低学习率，帮助跳出局部最优
+
+---
+
+## 六、Early Stopping 机制
+
+```python
+# 监控指标: f1_label1 (恶意流量的F1)
+best_score = -inf
+patience = 30
+
+for epoch in range(epochs):
+    score = val_metrics['f1_label1']
+    
+    if score > best_score:
+        best_score = score
+        patience_counter = 0
+        save_checkpoint(model)
+    else:
+        patience_counter += 1
+        if patience_counter >= 30:
+            print("[INFO] early stopping at epoch 86")
+            break
+```
+
+**你的实际训练过程:**
+
+```
+Epoch 1-69:  F1从0.5逐步提升到0.5805 (最佳epoch 69)
+Epoch 70-86: F1震荡，不再提升
+Epoch 86:    触发early stopping
+```
+
+---
+
+## 七、完整数据流示例
+
+```python
+# 一个batch的训练过程
+
+# 输入数据
+batch = {
+    "x":    tensor[64, 40, 85],   # 64个流，每个40个包，每包85维
+    "time": tensor[64, 40],        # 包间隔时间
+    "mask": tensor[64, 40],        # True=真实包, False=padding
+    "label": tensor[64],           # 0或1
+}
+
+# 前向传播
+e = projection(x)                    # [64,40,85] → [64,40,128]
+e = e + positional_encoding          # 添加位置信息
+e = e + time_mlp(log(1+iat))        # 添加时间信息
+h = transformer_encoder(e, mask)     # [64,40,128] → [64,40,128]
+z = attention_pool(h, mask)          # [64,40,128] → [64,128]
+logits = classifier(z)               # [64,128] → [64,2]
+
+# 损失计算
+probs = softmax(logits)              # [64,2]
+ce_loss = cross_entropy(logits, labels, label_smoothing=0.05)
+focal_weight = (1 - probs[labels]) ** 1.5
+loss = (focal_weight * ce_loss).mean()  # scalar
+
+# 反向传播
+loss.backward()
+gradient_clip(max_norm=1.0)
+optimizer.step()
+```
+
+---
+
+## 八、当前性能瓶颈分析
+
+基于你的结果：
+
+```
+Class 0 F1: 0.9879  ← 几乎完美
+Class 1 F1: 0.6842  ← 仍有提升空间
+最优阈值: 0.70       ← 较高，说明模型对Class 1不够自信
+```
+
+**问题根源:**
+
+1. **模型对Class 1的概率预测偏低** (分布峰值可能在0.6-0.7)
+2. **117个假阳性 + 63个假阴性**，两者都需要改善
+3. **特征区分度不足** - 部分恶意流量特征与良性流量相似
+
+**可能的改进方向:**
+
+* 增加模型容量 (d_model: 128→256, num_layers: 3→4)
+* 添加流级统计特征作为额外的输入分支
+* 使用对比学习增强特征表示
+* 数据增强 (mixup, 时间扰动)
+
+
+

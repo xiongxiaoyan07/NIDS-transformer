@@ -1,0 +1,13 @@
+Stage2 run summary
+==================
+best_epoch: 34
+metric_for_best: f1_label1
+best_score: 0.6235294117647059
+context_method: source_host
+context_policy: split_isolated
+window_size: 32
+
+Final metrics:
+train: loss=0.071307, acc=0.985859, macro_precision=0.851042, macro_recall=0.990002, macro_f1=0.907920, weighted_precision=0.989957, weighted_recall=0.985859, weighted_f1=0.987026, auc=0.9956663285891918, precision_label1=0.7022780832678712, recall_label1=0.9944382647385984, f1_label1=0.8232044198895028, cm=[[25878, 379], [5, 894]]
+val: loss=1.032088, acc=0.966727, macro_precision=0.751235, macro_recall=0.887787, macro_f1=0.803062, weighted_precision=0.976274, weighted_recall=0.966727, weighted_f1=0.970274, auc=0.8674222031893634, precision_label1=0.5096153846153846, recall_label1=0.803030303030303, f1_label1=0.6235294117647059, cm=[[3613, 102], [26, 106]]
+test: loss=1.330353, acc=0.966875, macro_precision=0.749076, macro_recall=0.847399, macro_f1=0.789136, weighted_precision=0.973662, weighted_recall=0.966875, weighted_f1=0.969602, auc=0.8565786467851803, precision_label1=0.5081521739130435, recall_label1=0.7192307692307692, f1_label1=0.5955414012738853, cm=[[7227, 181], [73, 187]]

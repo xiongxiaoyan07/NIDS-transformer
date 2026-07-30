@@ -1,0 +1,117 @@
+{
+  "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+  "file_size_mb": 236.1275053024292,
+  "raw_num_rows": 475809,
+  "raw_num_columns": 77,
+  "num_rows_after_label_filter": 475809,
+  "num_columns": 77,
+  "label_column": "label",
+  "label_counts_raw": {
+    "0": 265626,
+    "1": 210183
+  },
+  "binary_counts": {
+    "0": 265626,
+    "1": 210183
+  },
+  "attack_ratio": 0.4417381764531566,
+  "flow_id_column": "flow_id",
+  "duplicate_flow_id_rows": 242,
+  "dropped_missing_label_rows": 0,
+  "dropped_duplicate_flow_ids": false,
+  "args": {
+    "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+    "out_dir": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\results\\wednesday_suricata_flow_binary_lgbm_full",
+    "label_col": "label",
+    "flow_id_col": "flow_id",
+    "time_col": "flow_start_timestamp_us",
+    "models": [
+      "lgbm"
+    ],
+    "seed": 130,
+    "split": "random",
+    "train_size": 0.7,
+    "val_size": 0.1,
+    "test_size": 0.2,
+    "stratify": true,
+    "drop_duplicate_flow_ids": false,
+    "include_ports": true,
+    "include_protocol": true,
+    "drop_columns": "",
+    "min_numeric_ratio": 0.9,
+    "impute_strategy": "median",
+    "scale": true,
+    "robust_q_low": 5.0,
+    "robust_q_high": 95.0,
+    "clip_value": 50.0,
+    "threshold_metric": "f1_label1",
+    "threshold_steps": 999,
+    "class_weight": true,
+    "n_jobs": -1,
+    "n_estimators": 500,
+    "max_depth": null,
+    "min_samples_leaf": 1,
+    "logreg_max_iter": 2000,
+    "xgb_n_estimators": 600,
+    "xgb_max_depth": 6,
+    "xgb_learning_rate": 0.05,
+    "xgb_subsample": 0.9,
+    "xgb_colsample_bytree": 0.9,
+    "xgb_tree_method": "hist",
+    "lgbm_n_estimators": 800,
+    "lgbm_max_depth": -1,
+    "lgbm_learning_rate": 0.03,
+    "lgbm_num_leaves": 63,
+    "lgbm_subsample": 0.9,
+    "lgbm_colsample_bytree": 0.9,
+    "mlp_hidden": [
+      256,
+      128
+    ],
+    "mlp_alpha": 0.0001,
+    "mlp_batch_size": 2048,
+    "mlp_lr": 0.001,
+    "mlp_max_iter": 100,
+    "verbose_model": false,
+    "save_predictions": true
+  },
+  "num_final_features": 68,
+  "split_sizes": {
+    "train": 333066,
+    "val": 47581,
+    "test": 95162
+  },
+  "split_binary_counts": {
+    "train": {
+      "0": 185938,
+      "1": 147128
+    },
+    "val": {
+      "0": 26563,
+      "1": 21018
+    },
+    "test": {
+      "0": 53125,
+      "1": 42037
+    }
+  },
+  "dropped_feature_columns": {
+    "identifier_time_endpoint_label_or_disabled": [
+      "flow_id",
+      "flow_start_timestamp_us",
+      "flow_end_timestamp_us",
+      "source_ip",
+      "destination_ip",
+      "label"
+    ],
+    "non_numeric": [],
+    "all_nan_on_train": [],
+    "constant_on_train": [
+      "fwd_urg_flags",
+      "bwd_urg_flags",
+      "urg_flag_count"
+    ],
+    "top_missing_columns_full": {},
+    "top_inf_columns_full": {}
+  }
+}

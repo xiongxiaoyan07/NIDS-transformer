@@ -1,0 +1,45 @@
+{
+  "model_name": "MLP Baseline",
+  "input_dim": 75,
+  "hidden_dims": [
+    512,
+    256,
+    128,
+    64
+  ],
+  "num_params": 213442,
+  "best_epoch": 15,
+  "best_val_f1": 0.7619337186995325,
+  "full_metrics": {
+    "accuracy": 0.9626659135837334,
+    "macro_precision": 0.74145487832394,
+    "macro_recall": 0.809354661189905,
+    "macro_f1": 0.7706508462917445,
+    "weighted_precision": 0.9680282703050128,
+    "weighted_recall": 0.9626659135837334,
+    "weighted_f1": 0.9649653532784647,
+    "precision_label1": 0.4967628016480283,
+    "recall_label1": 0.6437833714721587,
+    "f1_label1": 0.5607973421926911,
+    "auc": 0.9552327656163553,
+    "pr_auc": 0.5604476128764463,
+    "per_class_f1": {
+      "0": 0.9805043503907979,
+      "1": 0.5607973421926911
+    },
+    "confusion_matrix": [
+      [
+        33244,
+        855
+      ],
+      [
+        467,
+        844
+      ]
+    ],
+    "num_classes": 2,
+    "num_samples": 35410,
+    "loss": 0.031577753180528016,
+    "threshold": 0.42999999999999977
+  }
+}

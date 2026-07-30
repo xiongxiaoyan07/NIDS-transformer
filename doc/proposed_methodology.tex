@@ -1,0 +1,903 @@
+% Preamble requirements:
+% \usepackage{amsmath,amssymb,booktabs,array,enumitem,graphicx,tikz}
+% \usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+%
+% Bibliography files used by this section:
+%   the proposal references.bib
+%   doc/related_work_additions.bib
+%   doc/proposed_methodology_additions.bib
+
+\providecommand{\methodfield}[1]{\texttt{\detokenize{#1}}}
+
+\section{Proposed Methodology}
+\label{sec:proposed_methodology}
+
+This section presents the proposed hierarchical intrusion-detection method in
+implementation-level detail. The detector models two complementary structures
+in network traffic. Stage~1 represents the ordered packets and statistical
+properties of an individual bidirectional flow, whereas Stage~2 models the
+relationship between a target flow and eligible historical flows. The two
+stages are connected by a fixed-dimensional Stage~1 embedding and are trained
+sequentially. This design makes it possible to quantify the contribution of
+intra-flow timing, flow statistics, and inter-flow context independently.
+
+The method builds on the Transformer architecture \cite{Vaswani2017}, but its
+contribution is not the use of self-attention alone. It combines (i) an explicit
+cumulative-time coordinate for irregular packet arrivals, (ii) a separately
+encoded flow-statistics branch with bounded feature-wise token modulation, and
+(iii) a causal target-query context encoder whose current flow attends only to
+historical flows. Time-aware packet modelling is motivated by prior NIDS work
+showing that packet order and elapsed time carry different information
+\cite{Han2023GTID}. The proposed hierarchy additionally separates within-flow
+evidence from across-flow behavior, following the broader observation that
+independently classified flow records can miss attacks whose evidence is spread
+over several connections
+\cite{LiuPatras2022NetSentry,Manocchio2024FlowTransformer,
+MartinReizabal2026FlowWindow}.
+
+\subsection{Architectural Overview}
+\label{subsec:method_architecture}
+
+Let flow $i$ contain a selected and padded packet-feature matrix
+$\mathbf{X}_i\in\mathbb{R}^{L\times d_p}$, a packet inter-arrival tensor
+$\mathbf{u}_i\in\mathbb{R}^{L}$, a validity mask
+$\mathbf{m}_i\in\{0,1\}^{L}$, a statistical flow vector
+$\mathbf{s}_i\in\mathbb{R}^{d_f}$, and a binary target
+$y_i\in\{0,1\}$. The principal configuration uses $L=128$. Stage~1 computes
+
+\begin{equation}
+    \left(\boldsymbol{\ell}^{(1)}_i,\mathbf{z}^{(1)}_i\right)
+    =F_{\theta_1}
+    \left(
+        \mathbf{X}_i,\mathbf{u}_i,\mathbf{m}_i,\mathbf{s}_i
+    \right),
+    \label{eq:method_stage1_mapping}
+\end{equation}
+
+where $\boldsymbol{\ell}^{(1)}_i\in\mathbb{R}^{2}$ are Stage~1 logits and
+$\mathbf{z}^{(1)}_i\in\mathbb{R}^{d}$ is the fused representation exported to
+Stage~2. In the principal model, $d=128$.
+
+After all Stage~1 embeddings have been exported, the flows are stably sorted by
+start time and flow identifier. For a context relation $r$ and target flow $i$,
+Stage~2 constructs a bounded causal sequence
+
+\begin{equation}
+    \mathbf{Z}^{(r)}_i=
+    \left[
+        \mathbf{z}^{(1)}_{j_1},\ldots,
+        \mathbf{z}^{(1)}_{j_{K_i}},
+        \mathbf{z}^{(1)}_i
+    \right],
+    \qquad j_k<i,quad K_i\leq W-1,
+    \label{eq:method_stage2_input}
+\end{equation}
+
+where the current flow is always the last valid token and the principal context
+window is $W=128$, including the target. Stage~2 predicts
+
+\begin{equation}
+    \boldsymbol{\ell}^{(2,r)}_i
+    =G_{\theta_2}
+    \left(\mathbf{Z}^{(r)}_i,\boldsymbol{\mu}_i\right),
+    \label{eq:method_stage2_mapping}
+\end{equation}
+
+where $\boldsymbol{\mu}_i$ masks left padding. The final malicious-flow
+probability is the class-1 softmax output of
+$\boldsymbol{\ell}^{(2,r)}_i$.
+
+Figure~\ref{fig:method_architecture} shows the information path. Flow labels
+and Suricata alert fields are targets only and do not enter either encoder.
+
+\begin{figure}[t]
+    \centering
+    \begin{tikzpicture}[
+        node distance=4.5mm,
+        block/.style={draw, rectangle, rounded corners=2pt, align=center,
+                      text width=11.4cm, minimum height=7.5mm, fill=black!3,
+                      font=\small},
+        side/.style={draw, rectangle, rounded corners=2pt, align=center,
+                     text width=3.2cm, minimum height=8mm, fill=black!3,
+                     font=\small},
+        arrow/.style={-{Latex[length=2mm]},thick}
+    ]
+        \node[block] (packet) {Selected packet features, inter-arrival times, and packet mask};
+        \node[block, below=of packet] (projection) {Record projection and cumulative time-aware sinusoidal encoding};
+        \node[block, below=of projection] (film) {Bounded flow-conditioned token modulation};
+        \node[side, right=7mm of film] (flow) {Encoded flow\\statistics};
+        \node[block, below=of film] (encoder) {Masked intra-flow Transformer encoder};
+        \node[block, below=of encoder] (pool) {Attention + mean + max pooling};
+        \node[block, below=of pool] (z) {Stage~1 flow embedding $\mathbf{z}^{(1)}_i$};
+        \node[block, below=of z] (context) {Causal relation-specific context construction};
+        \node[block, below=of context] (query) {Current-flow query over historical Stage~1 embeddings};
+        \node[block, below=of query] (gate) {Gated context update, residual feed-forward network, and classifier};
+        \node[block, below=of gate] (output) {Context-aware malicious-flow probability};
+
+        \draw[arrow] (packet) -- (projection);
+        \draw[arrow] (projection) -- (film);
+        \draw[arrow] (flow) -- (film);
+        \draw[arrow] (film) -- (encoder);
+        \draw[arrow] (encoder) -- (pool);
+        \draw[arrow] (pool) -- (z);
+        \draw[arrow] (z) -- (context);
+        \draw[arrow] (context) -- (query);
+        \draw[arrow] (query) -- (gate);
+        \draw[arrow] (gate) -- (output);
+    \end{tikzpicture}
+    \caption{Detailed architecture of the proposed two-stage detector. The
+    statistical branch conditions Stage~1 packet tokens, while Stage~2 uses the
+    target flow as the query and historical flows as keys and values.}
+    \label{fig:method_architecture}
+\end{figure}
+
+\subsection{Stage~1: Intra-Flow Time-Aware Representation}
+\label{subsec:method_stage1}
+
+Stage~1 transforms a variable-length packet sequence into one flow embedding.
+Its principal configuration consists of a record projection, time-aware
+sinusoidal encoding, flow-conditioned token modulation, a pre-normalized
+Transformer encoder, hybrid mask-aware pooling, and a two-class prediction
+head.
+
+\subsubsection{Packet-Record Projection}
+\label{subsubsec:packet_projection}
+
+For packet position $t$, the preprocessed feature vector
+$\mathbf{x}_{i,t}\in\mathbb{R}^{d_p}$ is projected to the model dimension:
+
+\begin{equation}
+    \mathbf{e}_{i,t}
+    =\operatorname{LN}
+    \left(W_p\mathbf{x}_{i,t}+\mathbf{b}_p\right),
+    \qquad
+    \mathbf{e}_{i,t}\in\mathbb{R}^{d}.
+    \label{eq:record_projection}
+\end{equation}
+
+The implementation permits an MLP projection, but the principal configuration
+uses one linear projection followed by layer normalization. Categorical packet
+fields have already been one-hot encoded, numerical fields have been transformed
+and robustly scaled, and binary fields remain in $\{0,1\}$ as described in
+Section~\ref{sec:dataset_preprocessing}.
+
+\subsubsection{Cumulative Time-Aware Encoding}
+\label{subsubsec:time_aware_encoding}
+
+Conventional sinusoidal positional encoding represents packet order but cannot
+distinguish two adjacent packets separated by microseconds from two adjacent
+packets separated by seconds. Stage~1 therefore combines ordinal position with
+cumulative elapsed time. The preprocessing pipeline stores
+
+\begin{equation}
+    u_{i,t}=\log\left(1+\Delta\tau_{i,t}\right),
+    \label{eq:stored_log_iat}
+\end{equation}
+
+where $\Delta\tau_{i,t}$ is the nonnegative microsecond inter-arrival time from
+the previous packet in the same bidirectional flow. Inside the model, the
+interval is reconstructed and masked:
+
+\begin{equation}
+    \widehat{\Delta\tau}_{i,t}
+    =m_{i,t}\max\left(0,\exp(u_{i,t})-1\right).
+    \label{eq:reconstructed_iat}
+\end{equation}
+
+The cumulative elapsed time and its smoothed logarithm are
+
+\begin{align}
+    c_{i,t} &= \sum_{k=1}^{t}\widehat{\Delta\tau}_{i,k},\\
+    p_{i,t} &= \log\left(1+c_{i,t}+\alpha\right),
+    \qquad \alpha=10^{-7}.
+    \label{eq:cumulative_time_feature}
+\end{align}
+
+Let the zero-based packet position be $q_t=t-1$. The combined coordinate is
+$r_{i,t}=q_t+p_{i,t}$. For channel pair $j$, the time-aware encoding is
+
+\begin{align}
+    \operatorname{TE}_{i,t,2j}
+    &=\sin\left(
+        \frac{r_{i,t}}{10000^{2j/d}}
+      \right),\\
+    \operatorname{TE}_{i,t,2j+1}
+    &=\cos\left(
+        \frac{r_{i,t}}{10000^{2j/d}}
+      \right).
+    \label{eq:time_aware_sinusoid}
+\end{align}
+
+Padding positions receive a zero encoding. The encoded packet token is
+
+\begin{equation}
+    \widetilde{\mathbf{e}}_{i,t}
+    =\operatorname{Dropout}
+    \left(
+        \mathbf{e}_{i,t}+m_{i,t}\operatorname{TE}_{i,t}
+    \right).
+    \label{eq:time_encoded_packet}
+\end{equation}
+
+This construction follows the time-aware Transformer principle used in GTID
+\cite{Han2023GTID}, but it is applied here to structured, payload-content-free
+packet metadata. Position-only and time-only modes are retained as ablations.
+In the time-only mode, $r_{i,t}=p_{i,t}$; in the position-only mode,
+$r_{i,t}=q_t$.
+
+\subsubsection{Flow-Statistics Encoder}
+\label{subsubsec:flow_encoder}
+
+The separately preprocessed statistical flow vector $\mathbf{s}_i$ is mapped
+to the packet-model dimension through a bottleneck encoder:
+
+\begin{equation}
+    \mathbf{f}_i
+    =\operatorname{LN}_2
+    \left(
+        W_{f,2}\,
+        \operatorname{Dropout}
+        \left(
+            \operatorname{GELU}
+            \left(
+                \operatorname{LN}_1(W_{f,1}\mathbf{s}_i+\mathbf{b}_{f,1})
+            \right)
+        \right)
+        +\mathbf{b}_{f,2}
+    \right).
+    \label{eq:flow_feature_encoder}
+\end{equation}
+
+The principal bottleneck dimension is 32 and the output dimension is 128. The
+bottleneck limits the capacity of the aggregate-feature branch and reduces the
+risk that high-dimensional flow statistics overwhelm packet-sequence evidence.
+
+\subsubsection{Bounded Flow-Conditioned Token Modulation}
+\label{subsubsec:token_film}
+
+The principal Stage~1 fusion mode is inspired by feature-wise linear modulation
+(FiLM), in which conditioning information produces feature-specific affine
+parameters \cite{Perez2018FiLM}. From the flow representation, a small network
+generates
+
+\begin{equation}
+    [\boldsymbol{\gamma}_i;\boldsymbol{\beta}_i]
+    =G_f(\mathbf{f}_i),
+    \qquad
+    \boldsymbol{\gamma}_i,\boldsymbol{\beta}_i\in\mathbb{R}^{d}.
+    \label{eq:film_parameters}
+\end{equation}
+
+For each packet token, the raw flow-conditioned residual is
+
+\begin{equation}
+    \mathbf{r}^{\mathrm{raw}}_{i,t}
+    =\eta
+    \left(
+        \boldsymbol{\gamma}_i\odot\widetilde{\mathbf{e}}_{i,t}
+        +\boldsymbol{\beta}_i
+    \right),
+    \qquad
+    \eta=\sigma(a),quad a_{0}=-5,
+    \label{eq:film_raw_residual}
+\end{equation}
+
+where $\odot$ denotes element-wise multiplication. The initial scale is
+$\sigma(-5)\approx0.0067$. In addition, the residual is constrained relative
+to the norm of its packet token. With the configured maximum residual ratio
+$\rho=0.13$,
+
+\begin{align}
+    \lambda_{i,t}
+    &=\min\left(
+        1,
+        \frac{\rho\|\widetilde{\mathbf{e}}_{i,t}\|_2}
+             {\|\mathbf{r}^{\mathrm{raw}}_{i,t}\|_2+\epsilon}
+      \right),\\
+    \mathbf{e}^{F}_{i,t}
+    &=\widetilde{\mathbf{e}}_{i,t}
+      +\lambda_{i,t}\mathbf{r}^{\mathrm{raw}}_{i,t}.
+    \label{eq:bounded_token_film}
+\end{align}
+
+The final layer producing $\boldsymbol{\gamma}_i$ and
+$\boldsymbol{\beta}_i$ is initialized to zero. The model therefore begins as
+the packet-only branch and learns a bounded statistical correction. This is
+particularly useful when aggregate statistics are predictive but potentially
+noisy or capture-specific.
+
+The terminology is important. Because the statistical vector is encoded in a
+separate branch but modulates packet tokens before self-attention, the principal
+configuration is most precisely described as \emph{separate-branch conditional
+intermediate fusion}. It is not strict post-pooling late fusion. A post-pooling
+gated fusion implementation is available as an alternative, but the reported
+principal Scheme~C configuration uses the bounded token-FiLM mechanism in
+Equation~\ref{eq:bounded_token_film}.
+
+\subsubsection{Masked Transformer Encoder}
+\label{subsubsec:stage1_transformer}
+
+The conditioned sequence
+$\mathbf{E}^{F}_i\in\mathbb{R}^{L\times d}$ is processed by a stack of
+pre-normalized Transformer encoder layers. For layer $\ell$,
+
+\begin{align}
+    \mathbf{A}^{\ell}_i
+    &=\operatorname{MHA}
+      \left(
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i),
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i),
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i);
+        \mathbf{m}_i
+      \right),\\
+    \overline{\mathbf{H}}^{\ell}_i
+    &=\mathbf{H}^{\ell-1}_i
+      +\operatorname{Dropout}(\mathbf{A}^{\ell}_i),\\
+    \mathbf{H}^{\ell}_i
+    &=\overline{\mathbf{H}}^{\ell}_i
+      +\operatorname{FFN}
+       \left(\operatorname{LN}(\overline{\mathbf{H}}^{\ell}_i)\right),
+    \label{eq:stage1_transformer_layer}
+\end{align}
+
+where $\mathbf{H}^{0}_i=\mathbf{E}^{F}_i$. Each attention head uses scaled
+dot-product attention
+
+\begin{equation}
+    \operatorname{Attn}(Q,K,V)
+    =\operatorname{softmax}
+      \left(
+        \frac{QK^{\top}}{\sqrt{d_h}}+M_i
+      \right)V,
+    \label{eq:scaled_dot_product_attention}
+\end{equation}
+
+where $M_i$ assigns negative infinity to padded key positions. The feed-forward
+network uses GELU activation. The principal model has two encoder layers, four
+attention heads, model dimension 128, feed-forward dimension 256, and dropout
+0.15.
+
+No causal mask is used inside Stage~1: all retained packets of the completed or
+truncated flow can attend to one another. Consequently, Stage~1 is a
+flow-level classifier, not a claim of packet-by-packet early detection. Padding
+is excluded from attention keys and from the subsequent pooling operation.
+
+\subsubsection{Hybrid Mask-Aware Pooling}
+\label{subsubsec:hybrid_pooling}
+
+The packet states are reduced using three complementary summaries. First, a
+learned attention score is computed for each valid token:
+
+\begin{align}
+    a_{i,t}
+    &=\mathbf{w}_{a,2}^{\top}
+      \operatorname{GELU}
+      \left(W_{a,1}\mathbf{h}_{i,t}+\mathbf{b}_{a,1}\right)+b_{a,2},\\
+    \omega_{i,t}
+    &=\frac{m_{i,t}\exp(a_{i,t})}
+      {\sum_{k=1}^{L}m_{i,k}\exp(a_{i,k})},\\
+    \mathbf{z}^{\mathrm{att}}_i
+    &=\sum_{t=1}^{L}\omega_{i,t}\mathbf{h}_{i,t}.
+    \label{eq:stage1_attention_pooling}
+\end{align}
+
+The masked mean and maximum are
+
+\begin{align}
+    \mathbf{z}^{\mathrm{mean}}_i
+    &=\frac{\sum_{t=1}^{L}m_{i,t}\mathbf{h}_{i,t}}
+            {\max(1,\sum_{t=1}^{L}m_{i,t})},\\
+    \mathbf{z}^{\mathrm{max}}_i
+    &=\max_{t:m_{i,t}=1}\mathbf{h}_{i,t}.
+    \label{eq:mean_max_pooling}
+\end{align}
+
+The final Stage~1 embedding combines all three:
+
+\begin{equation}
+    \mathbf{z}^{(1)}_i
+    =\operatorname{Dropout}
+      \left(
+        \operatorname{GELU}
+        \left(
+          \operatorname{LN}
+          \left(
+            W_o
+            [\mathbf{z}^{\mathrm{att}}_i;
+             \mathbf{z}^{\mathrm{mean}}_i;
+             \mathbf{z}^{\mathrm{max}}_i]
+            +\mathbf{b}_o
+          \right)
+        \right)
+      \right).
+    \label{eq:hybrid_pooling}
+\end{equation}
+
+Attention pooling can emphasize a small number of informative packets, mean
+pooling represents overall behavior, and max pooling preserves strong local
+activations. Their concatenation is projected back to dimension $d$ so Stage~2
+receives one consistently sized vector per flow.
+
+The Stage~1 class logits are
+
+\begin{equation}
+    \boldsymbol{\ell}^{(1)}_i
+    =h_1(\mathbf{z}^{(1)}_i),
+    \qquad
+    \mathbf{p}^{(1)}_i
+    =\operatorname{softmax}(\boldsymbol{\ell}^{(1)}_i).
+    \label{eq:stage1_classifier}
+\end{equation}
+
+The exported embedding is taken before the final two-class layer. It therefore
+retains information useful for contextual refinement rather than reducing each
+flow to a single probability.
+
+\subsubsection{Stage~1 Fusion Variants}
+\label{subsubsec:stage1_variants}
+
+The implementation supports the three controlled variants in
+Table~\ref{tab:stage1_fusion_variants}. They share the same packet features,
+sequence policy, split, Transformer capacity, training procedure, and classifier
+unless an experiment explicitly states otherwise.
+
+\begin{table}[t]
+    \centering
+    \caption{Stage~1 packet/flow integration variants.}
+    \label{tab:stage1_fusion_variants}
+    \small
+    \begin{tabular}{@{}p{1.1cm}p{3.1cm}p{8.9cm}@{}}
+        \toprule
+        Scheme & Input structure & Integration mechanism \\
+        \midrule
+        A & Packet + repeated flow statistics & The transformed flow vector is
+        concatenated to every packet before record projection. \\
+        B & Packet only & The flow-statistics branch is disabled; this isolates
+        packet order and time-aware encoding. \\
+        C & Packet + separate flow branch & The flow vector is encoded once and
+        conditionally modulates packet tokens through bounded token-FiLM. This
+        is the principal proposed Stage~1 configuration. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Stage~2: Causal Inter-Flow Context Modelling}
+\label{subsec:method_stage2}
+
+Stage~2 asks whether a target flow should be interpreted differently when
+recent related behavior is available. It operates only on Stage~1 embeddings
+and context metadata. Raw packet fields, flow statistics, and labels of
+historical flows are not loaded into the Stage~2 input.
+
+\subsubsection{Embedding Interface and Chronological Order}
+\label{subsubsec:embedding_interface}
+
+Stage~1 exports, for each split,
+
+\begin{equation}
+    \left(
+      \operatorname{flow\_id}_i,
+      y_i,
+      \mathbf{z}^{(1)}_i,
+      t_i^{0},u_i,v_i,\rho_i
+    \right),
+    \label{eq:stage1_export_tuple}
+\end{equation}
+
+where $t_i^{0}$ is the flow start time, $u_i$ and $v_i$ are source and
+destination identifiers, and $\rho_i$ is the split. Stage~2 validates unique
+flow identifiers, concatenates the split files, and stably sorts by
+$(t_i^{0},\operatorname{flow\_id}_i)$. The embedding rows are reordered with
+the metadata so their alignment is preserved.
+
+Training embeddings are exported with a deterministic, non-sampled loader.
+This is essential because the weighted training sampler draws with replacement;
+using it for export would duplicate some flows and omit others. The weighted
+sampler is used only for optimization batches.
+
+\subsubsection{Relation-Specific Causal Contexts}
+\label{subsubsec:context_relations}
+
+The context builder scans the sorted flows once from past to future. Before
+adding target flow $i$ to any history, it retrieves eligible earlier indices.
+The four evaluated relations are defined in
+Table~\ref{tab:context_relations}.
+
+\begin{table}[t]
+    \centering
+    \caption{Stage~2 context relations.}
+    \label{tab:context_relations}
+    \small
+    \begin{tabular}{@{}p{3.0cm}p{4.0cm}p{7.1cm}@{}}
+        \toprule
+        Method & Eligibility condition for $j<i$ & Interpretation \\
+        \midrule
+        \methodfield{time_only} & Always eligible & Most recent flows globally,
+        regardless of endpoint identity. \\
+        \methodfield{source_host} & $u_j=u_i$ & Earlier flows initiated by the
+        same source identifier. \\
+        \methodfield{destination_host} & $v_j=v_i$ & Earlier flows directed to
+        the same destination identifier. \\
+        \methodfield{endpoint} &
+        $\{u_j,v_j\}\cap\{u_i,v_i\}\neq\varnothing$ & Earlier flows sharing at
+        least one endpoint in either role. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+For relation $r$, let
+
+\begin{equation}
+    \mathcal{A}^{(r)}_i
+    =\left\{j<i:R_r(i,j)=1\right\}.
+    \label{eq:method_eligible_context}
+\end{equation}
+
+After split-policy filtering and deduplication, the most recent $W-1$ indices
+are retained:
+
+\begin{equation}
+    \mathcal{C}^{(r)}_i
+    =\operatorname{Recent}_{W-1}
+      \left(\mathcal{A}^{(r)}_i\right).
+    \label{eq:recent_context}
+\end{equation}
+
+The current flow is then appended, producing
+Equation~\ref{eq:method_stage2_input}. Histories are updated only after this
+sequence has been built, which prevents self-inclusion and future leakage. The
+principal context policy is \methodfield{online}: validation flows may use
+earlier training flows, and test flows may use earlier training, validation,
+and test flows, but never a future flow. This simulates persistent detector
+state across chronological deployment. No historical label is exposed.
+
+The term \methodfield{time_only} means chronological global recency. It does
+not mean that continuous inter-flow time gaps are supplied to Stage~2. In the
+current implementation, Stage~2 encodes relative context age, while explicit
+microsecond timing is modelled inside Stage~1.
+
+The collate function left-pads short sequences so the target remains at the last
+valid position:
+
+\begin{equation}
+    [\mathrm{PAD},\ldots,\mathrm{PAD},
+      \mathbf{z}^{(1)}_{j_1},\ldots,
+      \mathbf{z}^{(1)}_{j_{K_i}},
+      \mathbf{z}^{(1)}_i].
+    \label{eq:left_padded_context}
+\end{equation}
+
+The accompanying Boolean mask makes the physical padding positions irrelevant
+to positional encoding and attention.
+
+\subsubsection{Context-Age Positional Encoding}
+\label{subsubsec:context_age_encoding}
+
+If a target has $K_i$ historical tokens, the target receives age 0, the most
+recent historical flow receives age 1, and the oldest retained flow receives
+age $K_i$. Let $a_{i,k}$ denote this age index. Stage~2 adds a conventional
+sinusoidal encoding
+
+\begin{align}
+    \operatorname{PE}_{i,k,2j}
+    &=\sin\left(
+        \frac{a_{i,k}}{10000^{2j/d}}
+      \right),\\
+    \operatorname{PE}_{i,k,2j+1}
+    &=\cos\left(
+        \frac{a_{i,k}}{10000^{2j/d}}
+      \right).
+    \label{eq:stage2_age_encoding}
+\end{align}
+
+Unlike absolute tensor positions, age values are invariant to the amount of
+left padding. This allows the same target and history order to receive the same
+encoding in batches with different sequence lengths.
+
+\subsubsection{Target-Query Gated Multi-Head Attention}
+\label{subsubsec:target_query_attention}
+
+The principal Stage~2 model is
+\methodfield{target_query_gated}. Rather than allowing every historical token
+to attend to every other historical token, it uses the current flow as one
+query over the eligible history. Let $\mathbf{c}_i$ be the projected current
+Stage~1 embedding and let
+$\widetilde{\mathbf{H}}_i\in\mathbb{R}^{K_i\times d}$ contain age-encoded
+historical embeddings. For attention head $h$,
+
+\begin{align}
+    \mathbf{q}^{h}_i
+    &=W_Q^{h}\operatorname{LN}
+      \left(\mathbf{c}_i+\operatorname{PE}(0)\right),\\
+    \mathbf{K}^{h}_i
+    &=\operatorname{LN}(\widetilde{\mathbf{H}}_i)W_K^{h},\\
+    \mathbf{V}^{h}_i
+    &=\operatorname{LN}(\widetilde{\mathbf{H}}_i)W_V^{h},\\
+    \mathbf{h}^{h}_i
+    &=\operatorname{softmax}
+      \left(
+        \frac{\mathbf{q}^{h}_i(\mathbf{K}^{h}_i)^{\top}}
+             {\sqrt{d_h}}+M_i
+      \right)
+      \mathbf{V}^{h}_i.
+    \label{eq:target_query_attention}
+\end{align}
+
+The head outputs are concatenated and projected to obtain the historical
+summary $\mathbf{h}_i$. If no eligible historical flow exists,
+$\mathbf{h}_i=\mathbf{0}$. This explicit fallback prevents a fabricated
+padding token from contributing context.
+
+The model compares the current representation and context summary through
+difference and multiplicative interactions:
+
+\begin{align}
+    \mathbf{r}_i
+    &=[\mathbf{c}_i;\mathbf{h}_i;
+       \mathbf{c}_i-\mathbf{h}_i;
+       \mathbf{c}_i\odot\mathbf{h}_i],\\
+    \mathbf{v}_i
+    &=[\mathbf{h}_i;
+       \mathbf{c}_i-\mathbf{h}_i;
+       \mathbf{c}_i\odot\mathbf{h}_i].
+    \label{eq:target_context_interactions}
+\end{align}
+
+A dimension-wise gate and context update are then computed:
+
+\begin{align}
+    \mathbf{g}_i&=\sigma(G(\mathbf{r}_i)),\\
+    \mathbf{d}_i&=U(\mathbf{v}_i),\\
+    \mathbf{f}_i&=\operatorname{LN}
+      \left(\mathbf{c}_i+\mathbf{g}_i\odot\mathbf{d}_i\right).
+    \label{eq:gated_context_update}
+\end{align}
+
+When no history exists, both $\mathbf{g}_i$ and $\mathbf{d}_i$ are set to zero,
+so the model reduces to the current-flow representation. Finally, a residual
+feed-forward block produces
+
+\begin{align}
+    \mathbf{z}^{(2)}_i
+    &=\operatorname{LN}
+      \left(
+        \mathbf{f}_i+\operatorname{FFN}(\mathbf{f}_i)
+      \right),\\
+    \boldsymbol{\ell}^{(2)}_i
+    &=h_2(\mathbf{z}^{(2)}_i).
+    \label{eq:stage2_output}
+\end{align}
+
+The target-query formulation preserves a strong current-flow path and lets
+context act as a learned correction. Its attention-score matrix grows linearly
+with $W$ because it contains one query, whereas full self-attention constructs
+an $W\times W$ score matrix. This makes a window of 128 flows practical while
+retaining multi-head retrieval from historical behavior.
+
+\subsubsection{Stage~2 Control Models}
+\label{subsubsec:stage2_controls}
+
+To distinguish gains from context selection from gains caused merely by an
+additional classifier, all control models consume the same Stage~1 embeddings,
+context indices, left-padding convention, train/validation/test partitions,
+and optimization pipeline.
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{No-context MLP} selects only the final valid target token and
+    applies the same projection/classification style. It is the direct control
+    for whether historical flows add useful information.
+
+    \item \textbf{Vanilla Stage~2 Transformer} applies self-attention to the
+    complete context sequence and classifies the last valid token. It tests
+    whether all-to-all context interaction is preferable to target-query
+    retrieval.
+
+    \item \textbf{LSTM and GRU} use packed, right-compacted versions of the same
+    context sequences and classify the last recurrent state
+    \cite{Hochreiter1997LSTM,Cho2014GRU}.
+
+    \item \textbf{CNN+LSTM} applies parallel one-dimensional convolutions with
+    kernel sizes 3, 5, and 7, projects their concatenated outputs, and then uses
+    an LSTM. This control combines local pattern extraction with recurrent
+    sequence modelling \cite{Kim2014CNN,Hochreiter1997LSTM}.
+\end{itemize}
+
+These models are comparison baselines rather than components simultaneously
+active in the proposed target-query model.
+
+\subsection{Imbalance-Aware Sequential Training}
+\label{subsec:method_training}
+
+\subsubsection{Focal Objective and Controlled Sampling}
+\label{subsubsec:focal_training}
+
+Both stages use two-class softmax outputs and focal loss. For a sample with
+label $y_i$ and predicted probability $p_{i,y_i}$,
+
+\begin{equation}
+    \mathcal{L}_{\mathrm{focal}}
+    =-\frac{1}{B}
+      \sum_{i=1}^{B}
+      \alpha_{y_i}
+      \left(1-p_{i,y_i}\right)^{\gamma}
+      \log p_{i,y_i}.
+    \label{eq:method_focal_loss}
+\end{equation}
+
+Focal loss reduces the influence of easily classified examples and was
+originally proposed for severe foreground/background imbalance
+\cite{Lin2017FocalLoss}. The principal configuration uses $\gamma=1$ and no
+label smoothing. Stage~1 applies mild class weights $[1,1.25]$; Stage~2 uses
+near-uniform weights $[1,1.01]$.
+
+Training batches are additionally formed by a controlled weighted sampler. If
+$n_0$ and $n_1$ are the training counts and the desired expected positive
+fraction is $q$, each negative and positive example receives
+
+\begin{equation}
+    w_0=\frac{1-q}{n_0},
+    \qquad
+    w_1=\frac{q}{n_1}.
+    \label{eq:controlled_sampler}
+\end{equation}
+
+Sampling is performed with replacement for exactly the original number of
+training examples per epoch. The principal values are $q=0.09$ for Stage~1 and
+$q=0.05$ for Stage~2. These values increase minority exposure relative to the
+natural 3.945\% prevalence without forcing an artificial 50/50 training
+distribution. Validation and test loaders never use weighted sampling.
+
+\subsubsection{Optimization and Model Selection}
+\label{subsubsec:optimization}
+
+Both stages are optimized with AdamW, which decouples weight decay from the
+adaptive gradient update \cite{Loshchilov2019AdamW}. Stage~1 uses learning rate
+$10^{-4}$, weight decay $10^{-4}$, batch size 128, gradient-norm clipping at
+1.0, and mixed-precision training when CUDA is available. A
+ReduceLROnPlateau scheduler monitors validation PR-AUC, halves the learning rate
+after five unimproved epochs, and does not reduce it below $10^{-6}$. Training
+stops after 25 epochs without improvement, up to a maximum of 500 epochs.
+
+Stage~2 uses learning rate $3\times10^{-5}$, weight decay
+$3\times10^{-4}$, batch size 128, gradient-norm clipping at 0.5, and mixed
+precision on CUDA. The first five epochs linearly warm the learning rate from
+5\% to 100\% of its configured value. Cosine annealing then reduces it to 1\%
+of the initial rate. Early stopping patience is 15 epochs with a maximum of 500
+epochs.
+
+The best checkpoint in each stage is selected by validation PR-AUC. This
+threshold-independent criterion is appropriate for the imbalanced data and
+avoids selecting a checkpoint from accuracy dominated by label~0
+\cite{SaitoRehmsmeier2015}. The test partition is not used to choose the model.
+
+\subsubsection{Sequential Stage Training and Embedding Export}
+\label{subsubsec:sequential_training}
+
+The complete training procedure is:
+
+\begin{enumerate}[label=\textbf{Step \arabic*:},leftmargin=*]
+    \item Fit the Stage~1 preprocessor only on the training partition and
+    transform all partitions with the frozen preprocessing state.
+
+    \item Train Stage~1 using the weighted training loader. Select the best
+    checkpoint by validation PR-AUC and restore that checkpoint.
+
+    \item Export exactly one Stage~1 embedding per flow using deterministic,
+    non-sampled loaders. Store the flow identifier, label, split, start time,
+    source identifier, and destination identifier with the embedding.
+
+    \item Concatenate and chronologically sort the Stage~1 outputs. Construct
+    causal context indices using only metadata and prior indices.
+
+    \item Train Stage~2 while treating Stage~1 embeddings as fixed inputs.
+    Select and restore the best Stage~2 checkpoint using validation PR-AUC.
+
+    \item Select a decision threshold on validation predictions and apply that
+    fixed threshold once to the test predictions.
+\end{enumerate}
+
+The current implementation does not back-propagate Stage~2 gradients into
+Stage~1. Sequential training makes the source of an improvement auditable: a
+Stage~2 gain is attributable to contextual modelling over a fixed representation,
+not to an unreported change in the packet encoder.
+
+\subsubsection{Validation-Selected Decision Threshold}
+\label{subsubsec:decision_threshold}
+
+For class-1 probability $p_i$, the prediction is
+
+\begin{equation}
+    \widehat{y}_i=\mathbb{I}[p_i\geq\delta^{*}].
+    \label{eq:method_decision_rule}
+\end{equation}
+
+The principal implementation selects $\delta^{*}$ by maximizing class-1 F1 on
+the validation partition. Stage~2 searches 199 thresholds between 0.01 and
+0.99. The selected threshold is then frozen for test evaluation. Macro-F1 is
+the primary reported aggregate F1 metric, while class-1 precision, recall, and
+F1 are reported separately to make the threshold trade-off explicit. A
+test-optimized threshold may be computed only as a clearly labelled diagnostic
+oracle and must not be reported as deployable test performance. This separation
+follows standard guidance against test-set adaptation in security machine
+learning \cite{Arp2022DosDonts}.
+
+\subsection{Principal Configuration}
+\label{subsec:principal_configuration}
+
+Table~\ref{tab:principal_method_config} records the architecture used for the
+principal experiments. Values changed by an ablation, such as packet sequence
+length, truncation strategy, context relation, or Stage~2 encoder type, must be
+reported with that experiment rather than silently replacing this table.
+
+\begin{table}[t]
+    \centering
+    \caption{Principal architecture and optimization configuration.}
+    \label{tab:principal_method_config}
+    \small
+    \begin{tabular}{@{}p{2.0cm}p{4.4cm}p{7.6cm}@{}}
+        \toprule
+        Stage & Component & Principal value \\
+        \midrule
+        Stage~1 & Packet sequence & $L=128$, head selection, right padding \\
+        Stage~1 & Packet encoder & $d=128$, 4 heads, 2 Transformer layers,
+        FFN dimension 256, dropout 0.15 \\
+        Stage~1 & Time encoding & Position + cumulative log-time,
+        $\alpha=10^{-7}$ \\
+        Stage~1 & Statistical branch & Bottleneck dimension 32, token-FiLM,
+        initial scale logit $-5$, residual cap $\rho=0.13$ \\
+        Stage~1 & Pooling & Learned attention + masked mean + masked max \\
+        Stage~1 & Optimization & AdamW, $10^{-4}$ learning rate,
+        $10^{-4}$ weight decay, batch 128, focal $\gamma=1$,
+        sampled positive fraction 0.09 \\
+        \midrule
+        Stage~2 & Main encoder & Target-query gated multi-head attention \\
+        Stage~2 & Context & Source-host in the principal/best configuration;
+        time-only, destination-host, and endpoint are controlled comparisons \\
+        Stage~2 & Context policy & $W=128$ including target, online causal
+        history, deduplication, left padding \\
+        Stage~2 & Representation & $d=128$, 4 heads, age positional encoding,
+        FFN dimension 256, dropout 0.25 \\
+        Stage~2 & Optimization & AdamW, $3\times10^{-5}$ learning rate,
+        $3\times10^{-4}$ weight decay, batch 128, focal $\gamma=1$,
+        sampled positive fraction 0.05 \\
+        Both & Reproducibility & Random seed 130; validation PR-AUC checkpoint
+        selection; validation-only threshold selection \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Computational Properties}
+\label{subsec:method_complexity}
+
+For one Stage~1 flow, the self-attention score computation in each layer has
+time and memory complexity $O(L^2d)$ and $O(L^2)$, respectively, while the
+feed-forward block costs $O(Ld d_{\mathrm{ff}})$. The statistical encoder and
+token-FiLM modulation are linear in $L$. Fixing $L=128$ therefore bounds both
+memory and inference cost independently of the original packet count.
+
+For Stage~2, context construction is performed once by maintaining bounded
+global and host-indexed histories. The target-query attention map contains
+$W-1$ scores per head rather than $W^2$ scores, giving attention-map time and
+memory $O(Wd)$ and $O(W)$ per target, excluding the linear projections. The
+bounded context window prevents high-activity hosts from producing unbounded
+sequences.
+
+The hierarchy also permits deployment choices that a monolithic model would
+not. Stage~1 embeddings can be cached once per flow, and alternative Stage~2
+relations or encoders can be evaluated without reprocessing packets. The cost
+is that Stage~2 performance depends on the fixed Stage~1 representation and
+that the current sequential implementation is not jointly optimized end to end.
+
+\subsection{Methodological Summary}
+\label{subsec:method_summary}
+
+The proposed method first learns a packet-order- and time-aware flow
+representation, conservatively conditions it on aggregate flow statistics, and
+then refines the decision using causal histories of related flow embeddings.
+The main Stage~1 contribution is the combination of cumulative time-aware
+encoding, bounded flow-conditioned token modulation, and hybrid pooling. The
+main Stage~2 contribution is a relation-controlled target-query attention
+mechanism with a gated residual update and an exact no-history fallback. The
+strict separation among predictors, context metadata, and labels, together
+with chronological context construction and validation-only model selection,
+keeps the method aligned with realistic temporal evaluation.

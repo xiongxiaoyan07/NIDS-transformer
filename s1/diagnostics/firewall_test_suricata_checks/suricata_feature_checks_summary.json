@@ -1,0 +1,121 @@
+{
+  "packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\data\\firewall_test_20250731_160700-stage1_packets.csv",
+  "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\data\\firewall_test_20250731_160700-stage1_flows.csv",
+  "out_dir": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\diagnostics\\firewall_test_suricata_checks",
+  "counts": {
+    "flow_csv_rows": 38671,
+    "flow_csv_unique_flow_ids": 38671,
+    "packet_csv_unique_flow_ids": 38672,
+    "matched_flow_ids": 38671,
+    "packet_flow_ids_missing_in_flow_csv": 1,
+    "flow_ids_missing_in_packet_csv": 0
+  },
+  "checks": [
+    {
+      "name": "duplicate flow_id in flow CSV",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "flow CSV should normally have one row per flow_id.",
+      "threshold": 0.0,
+      "duplicate_flow_rows": 0
+    },
+    {
+      "name": "packet flow_id missing in flow CSV",
+      "status": "PASS",
+      "bad_count": 1,
+      "total_count": 38672,
+      "bad_rate": 2.58585022755482e-05,
+      "message": "Every packet flow_id should normally have a matching row in the flow CSV.",
+      "threshold": 0.001
+    },
+    {
+      "name": "flow CSV flow_id missing in packet CSV",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "Every flow CSV row should normally have at least one packet in packet CSV.",
+      "threshold": 0.001
+    },
+    {
+      "name": "packet count mismatch",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "packet CSV group size should equal total_fwd_packets + total_backward_packets.",
+      "threshold": 0.001
+    },
+    {
+      "name": "direction count mismatch",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "Packet direction counts should match total_fwd_packets and total_backward_packets.",
+      "threshold": 0.001
+    },
+    {
+      "name": "invalid packet direction values",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "Packet direction should be 0 or 1 for all packets used in Stage1.",
+      "threshold": 0.0
+    },
+    {
+      "name": "multi-packet flow_duration == 0",
+      "status": "PASS",
+      "bad_count": 12,
+      "total_count": 30610,
+      "bad_rate": 0.0003920287487749102,
+      "message": "Single-packet duration=0 is fine; multi-packet duration=0 is suspicious.",
+      "threshold": 0.001
+    },
+    {
+      "name": "flow duration disagrees with packet timestamps",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 30610,
+      "bad_rate": 0.0,
+      "message": "If packet timestamp range is positive but flow_duration is zero, aggregation timing may be wrong.",
+      "threshold": 0.001
+    },
+    {
+      "name": "flows with total_backward_packets == 0",
+      "status": "PASS",
+      "bad_count": 15958,
+      "total_count": 38671,
+      "bad_rate": 0.4126606500995578,
+      "message": "A high one-way-flow ratio may be normal for some PCAPs, but is suspicious for mostly bidirectional traffic.",
+      "threshold": 0.95,
+      "multi_packet_zero_backward_count": 7897,
+      "multi_packet_zero_backward_rate": 0.2579875857562888
+    },
+    {
+      "name": "flow length stats zero but packet length positive",
+      "status": "PASS",
+      "bad_count": 9963,
+      "total_count": 38671,
+      "bad_rate": 0.2576349202244576,
+      "message": "This often means flow length stats are payload-based; consider enhanced IP-length flow features.",
+      "threshold": 0.5
+    },
+    {
+      "name": "flow label != max(packet_label)",
+      "status": "PASS",
+      "bad_count": 0,
+      "total_count": 38671,
+      "bad_rate": 0.0,
+      "message": "Flow label should equal max packet_label if your plugin defines flow label as any alert in the flow.",
+      "threshold": 0.001
+    }
+  ],
+  "artifacts": {
+    "packet_flow_aggregate_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\diagnostics\\firewall_test_suricata_checks\\packet_flow_aggregate.csv",
+    "flow_packet_consistency_join_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\diagnostics\\firewall_test_suricata_checks\\flow_packet_consistency_join.csv"
+  }
+}

@@ -1,0 +1,576 @@
+% Results and Discussion chapter for:
+% A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection
+%
+% Required preamble packages:
+%   \usepackage{graphicx}
+%   \usepackage{booktabs}
+% If the thesis is compiled from another directory, redefine this path in the
+% preamble, for example: \renewcommand{\resultsfigurepath}{figures}
+\providecommand{\resultsfigurepath}{doc/figures}
+
+\chapter{Results and Discussion}
+\label{sec:results}
+
+This chapter reports and interprets the empirical results obtained under the
+protocol defined in Chapter~\ref{sec:experimental_methodology}. Results and
+discussion are integrated within each experiment block so that an observation,
+its operational meaning, and its limitations are presented together. The
+chapter therefore does not repeat the preprocessing pipeline, model equations,
+training procedure, threshold-selection rule, or metric definitions already
+given in Chapters~\ref{sec:dataset_preprocessing},
+\ref{sec:proposed_methodology}, and
+\ref{sec:experimental_methodology}.
+
+Unless stated otherwise, F1, precision, and recall refer to their
+macro-averaged values. Class-1 measures are reported separately because label
+1 is the alert-derived positive class. The analysis prioritizes macro-F1,
+class-1 F1, PR-AUC, and false-positive rate (FPR) over accuracy alone. This is
+important because the positive class represents only $3{,}520/84{,}380=4.17\%$
+of the principal test manifest; under such imbalance, accuracy and ROC-AUC may
+remain high even when positive retrieval is materially weaker
+\cite{SaitoRehmsmeier2015}. All confusion matrices are ordered as
+TN/FP/FN/TP, and all threshold-dependent metrics use the threshold selected on
+the validation set.
+
+\section{Comparison Scope}
+\label{subsec:results_comparison_boundaries}
+
+The available experiments use two principal test manifests. Their boundaries must be
+preserved because equal sample counts do not imply identical examples or class
+composition. Table~\ref{tab:results_manifest_scope} states which comparisons
+are controlled.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Test-manifest boundaries used in this chapter.}
+    \label{tab:results_manifest_scope}
+    \begin{tabular}{@{}p{5.1cm}rrrp{4.9cm}@{}}
+        \toprule
+        Experiment block & $N$ & $N_0$ & $N_1$ & Permitted comparison \\
+        \midrule
+        Stage~1 sequence models, flow-statistics MLP, encodings, sequence
+        lengths, packet-selection strategies, and controlled Schemes A--C
+        & 35,410 & 34,003 & 1,407 & Direct comparison within this block \\
+        Full-data Stage~1 Scheme C reference and all principal Stage~2 experiments
+        & 84,380 & 80,860 & 3,520 & Direct comparison within this block \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The flow-statistics MLP now uses the same 34,003/1,407 class composition as the
+sequence models and is included as a direct Stage~1 baseline. Two Scheme C
+evaluations are retained for different purposes: the 35,410-flow run provides
+the controlled A--C fusion comparison, whereas the separate 84,380-flow run
+supplies the frozen embeddings and independent Stage~1 baseline used in the
+Stage~2 analysis. Results from these two manifests are never mixed in one
+effect-size calculation. The capture is also
+organization-specific, so numerical comparisons with studies using public
+datasets, different attack taxonomies, or different labeling rules would not
+be controlled. These restrictions follow established guidance on avoiding
+dataset and evaluation artefacts in intrusion-detection research
+\cite{SommerPaxson2010,Arp2022DosDonts}.
+
+\section{Stage~1: Intra-Flow Representation}
+\label{subsec:results_stage1}
+
+\subsection{Architecture and Temporal-Encoding Effects}
+\label{subsubsec:results_stage1_models}
+
+Figure~\ref{fig:results_stage1_models} compares the Stage~1 model families and
+encoding ablations on the common 35,410-flow test set. A figure is used here
+instead of a wide predictive-performance table because the main question is
+the relative pattern across macro-F1, class-1 F1, and PR-AUC. The exact
+computational measurements are retained separately in
+Table~\ref{tab:results_stage1_errors_efficiency}.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_model_comparison.pdf}
+    \caption{Stage~1 architecture and encoding comparison on the common
+    35,410-flow test manifest. The horizontal axis begins at 0.52 to make the
+    differences visible; absolute values are printed at the end of each bar.}
+    \label{fig:results_stage1_models}
+\end{figure}
+
+The combined positional-and-cumulative-time encoder produces the strongest
+overall result: macro-precision $0.8896$, macro-recall $0.8869$, macro-F1
+$0.8882$, class-1 F1 $0.7853$, ROC-AUC $0.9860$, and PR-AUC $0.8564$. Its
+confusion matrix is $33{,}707/296/306/1{,}101$, corresponding to an FPR of
+$0.8705\%$. Relative to LSTM+time, the strongest non-Transformer baseline by
+macro-F1, it gains $0.0205$ macro-F1, $0.0398$ class-1 F1, and $0.0487$
+PR-AUC. It also recovers 95 additional positive flows, while adding only 10
+false positives.
+
+The encoding ablation shows that ordinal position and elapsed time are
+complementary rather than interchangeable. Compared with no encoding, the
+combined representation increases macro-F1 by $0.0375$ and PR-AUC by
+$0.0561$, while reducing FP from 420 to 296 and FN from 394 to 306. Time-only
+encoding is stronger than position-only encoding, particularly in macro-recall
+($0.8776$ versus $0.8642$), but combining them gives a further $0.0064$
+macro-F1 improvement over time only. Standard positional encoding represents
+token order rather than physical elapsed time \cite{Vaswani2017}; this result
+is therefore consistent with traffic-specific evidence that timing carries
+additional information \cite{Han2023GTID}.
+
+The lowest FPR in this block belongs to the GRU ($0.8293\%$), but it also has
+437 FN, the largest missed-positive count among these models. The result
+illustrates why FPR cannot be interpreted in isolation: fewer alerts may simply
+reflect a more conservative detector. The proposed Stage~1 model instead
+provides the best macro-F1 and class-1 F1, indicating a better balance between
+false alerts and missed attacks.
+
+The flow-statistics MLP establishes the value of packet-sequence modelling on
+the same test composition. Metrics recomputed from its confusion matrix are
+macro-precision $0.7501$, macro-recall $0.8094$, macro-F1 $0.7762$, class-1 F1
+$0.5723$, and FPR $2.5086\%$; the run reports ROC-AUC $0.9552$ and PR-AUC
+$0.5604$. The position+time Transformer raises macro-F1 by $0.1121$, class-1
+F1 by $0.2130$, ROC-AUC by $0.0308$, and PR-AUC by $0.2960$. Its confusion
+matrix also contains 557 fewer FP and 195 fewer FN. Hence the advantage is not
+limited to threshold-free ranking: the packet-sequence model simultaneously
+reduces false-alert burden and missed positives at its selected operating
+point.
+
+Figure~\ref{fig:results_stage1_errors} makes the operating-point trade-offs
+explicit. Because every model has the same 34,003 negative examples, the FP
+bars are directly proportional to FPR. GRU has the lowest FPR, but its 437 FN
+show that the result is achieved with weak positive coverage. By contrast, the
+position+time model adds only 14 FP relative to GRU while removing 131 FN.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_error_comparison.pdf}
+    \caption{Stage~1 false-positive and false-negative counts on the common
+    35,410-flow test manifest. FPR is printed beside each FP count.}
+    \label{fig:results_stage1_errors}
+\end{figure}
+
+Explicit time information also benefits the recurrent baseline. LSTM+time
+raises macro-F1 from $0.8582$ to $0.8677$, class-1 F1 from $0.7273$ to
+$0.7455$, and PR-AUC from $0.7976$ to $0.8077$, while removing 29 FP and 22
+FN. The CNN result is more nuanced: CNN1D+time improves macro-F1 and class-1 F1
+and removes 116 FP, but its PR-AUC falls from $0.7975$ to $0.7821$ and FN rises
+by 30. Thus, an improved selected operating point does not necessarily imply
+better probability ranking across all thresholds.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Stage~1 parameter counts and single-run training times measured on
+    a Google Colab T4 GPU.}
+    \label{tab:results_stage1_errors_efficiency}
+    \begin{tabular}{@{}lrrr@{}}
+        \toprule
+        Model & Trainable parameters & Training time (s) & Training time (min) \\
+        \midrule
+        Position+time Transformer & 344,963 & 4,337.6 & 72.29 \\
+        Time-only Transformer & 344,963 & 2,250.5 & 37.51 \\
+        Position-only Transformer & 344,963 & 1,994.7 & 33.25 \\
+        LSTM+time & 217,346 & 3,556.3 & 59.27 \\
+        CNN1D+time & 70,274 & 1,162.4 & 19.37 \\
+        GRU & 162,690 & 3,684.4 & 61.41 \\
+        LSTM & 216,834 & 3,381.2 & 56.35 \\
+        CNN1D & 68,354 & 1,591.0 & 26.52 \\
+        BiLSTM & 564,738 & 2,625.7 & 43.76 \\
+        No-encoding Transformer & 344,963 & 2,213.9 & 36.90 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The MLP is omitted from Table~\ref{tab:results_stage1_errors_efficiency}
+because its parameter count and training time were not included in the
+supplied run summary.
+
+CNN1D+time is the fastest Stage~1 model at 1,162.4 seconds, whereas the
+position+time Transformer takes 4,337.6 seconds. The proposed encoder is not
+the largest model, because the BiLSTM contains 564,738 parameters, yet it is
+the most expensive recorded run. Because all Stage~1 runs in this block were
+executed on a Colab T4 GPU, the hardware class is controlled. The values still
+represent total single-run training cost rather than pure per-epoch throughput:
+model-specific early stopping, data loading, and Colab runtime variation can
+affect wall-clock time. Parameter count alone therefore does not explain the
+observed training duration.
+
+\subsection{Packet and Flow-Statistics Integration}
+\label{subsubsec:results_stage1_fusion}
+
+All three schemes in Figure~\ref{fig:results_stage1_fusion} use the same
+35,410-flow test manifest. Scheme A tiles the flow-statistics vector into every
+packet token, Scheme B uses packet features only, and Scheme C keeps packet and
+flow representations separate before bounded token-FiLM fusion.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_fusion_comparison.pdf}
+    \caption{Controlled Stage~1 integration comparison on the common
+    35,410-flow manifest. Left: macro metrics and threshold-independent ranking
+    metrics. Right: false-positive and false-negative counts. The score axis is
+    truncated and explicitly labelled.}
+    \label{fig:results_stage1_fusion}
+\end{figure}
+
+Within the controlled A--B comparison, Scheme B increases macro-F1 by
+$0.0130$, macro-recall by $0.0269$, ROC-AUC by $0.0059$, and PR-AUC by
+$0.0238$. It detects 77 additional positives, reducing FN from 383 to 306,
+while producing 32 more FP. Scheme A has slightly higher macro-precision
+($0.8919$ versus $0.8896$), but its weaker recall and ranking performance show
+that repeating the same flow-statistics vector at every packet position does
+not replace sequence-specific evidence. This supports keeping packet and
+statistical representations in distinct branches before controlled fusion.
+
+Scheme C obtains the strongest controlled result: macro-precision $0.8990$,
+macro-recall $0.8920$, macro-F1 $0.8955$, class-1 F1 $0.7991$, ROC-AUC
+$0.9890$, and PR-AUC $0.8763$. Its confusion matrix is
+$33{,}736/267/293/1{,}114$, giving FPR $0.7852\%$ and FNR $20.8244\%$.
+Relative to Scheme B, C raises macro-F1 by $0.0072$, class-1 F1 by $0.0138$,
+and PR-AUC by $0.0199$, while removing 29 FP and 13 FN. FPR consequently falls
+from $0.8705\%$ to $0.7852\%$. This is the cleanest evidence that the separate
+flow-statistics branch contributes information beyond the packet-only encoder,
+because both error types improve on the same test examples.
+
+The comparison with Scheme A is operationally even clearer. Scheme C misses 90
+fewer positive flows while producing only three additional false alerts. Its
+FPR is therefore nearly unchanged ($0.7852\%$ versus $0.7764\%$), while
+macro-F1 increases by $0.0202$ and PR-AUC by $0.0436$. Tiling an aggregate
+vector into every token appears less effective than preserving separate
+packet- and flow-level pathways and allowing a bounded modulation mechanism to
+combine them after sequence encoding.
+
+The validation-selected thresholds differ substantially: 0.715 for A, 0.455
+for B, and 0.683 for C. These values should not be interpreted as directly
+comparable confidence scales because the three models need not be equally
+calibrated. The ordering is nevertheless supported by ROC-AUC and PR-AUC,
+which do not depend on a single operating threshold. Scheme B has the lowest
+test loss ($0.0576$ versus $0.0684$ for C), but the principal selection
+criterion is macro-F1; loss also reflects probability calibration and the
+training objective rather than the final error balance alone.
+
+For the later hierarchical experiment, a separate full-data Scheme C run is
+evaluated on 84,380 flows and obtains macro-F1 $0.8954$, PR-AUC $0.8763$, FPR
+$0.8249\%$, and confusion matrix $80{,}193/667/732/2{,}788$. That run is used
+only as the Stage~1 baseline in Table~\ref{tab:results_hierarchical_gain}; its
+counts are not substituted into the controlled A--C comparison above.
+
+\subsection{Sequence Length and Packet Selection}
+\label{subsubsec:results_sequence_length}
+
+Figure~\ref{fig:results_stage1_sensitivity} combines the two Stage~1
+sensitivity studies. The line plot reveals whether additional packet history
+produces monotonic gains, while the grouped bars expose the precision--recall
+trade-off among packet-selection strategies without another wide table.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_sensitivity.pdf}
+    \caption{Stage~1 sensitivity analysis. Left: maximum packet-sequence length
+    under head selection. Right: packet-selection strategy at $L=128$. Dashed
+    lines identify the selected sequence length. Truncated axes are explicitly
+    labelled.}
+    \label{fig:results_stage1_sensitivity}
+\end{figure}
+
+Performance is non-monotonic in sequence length. Short inputs ($L=8$ and
+$L=16$) produce the weakest PR-AUC values, $0.8369$ and $0.8455$, suggesting
+that the initial packets alone do not always contain sufficient ranking
+evidence. At $L=32$, PR-AUC reaches its maximum of $0.8571$, but macro-F1 is
+only $0.8817$. At $L=64$, macro-recall is highest ($0.8907$) and FN is lowest
+(294), but FPR rises to $0.9676\%$. The selected $L=128$ configuration gives
+the best macro-F1 ($0.8882$), class-1 F1 ($0.7853$), ROC-AUC ($0.9860$), and
+the lowest FPR in this length sweep ($0.8705\%$). Increasing the limit to 256
+reduces macro-F1 by $0.0062$ and PR-AUC by $0.0071$, while adding 46 FP.
+Consequently, 128 packets represent a balanced evidence budget rather than an
+arbitrary maximum.
+
+Head and head-tail selection are practically close. Head improves macro-F1 by
+$0.0016$ and produces eight fewer FN, whereas head-tail removes one FP and has
+a $0.0002$ PR-AUC advantage. Such differences are too small for a strong
+single-seed claim. Random selection obtains the highest macro-precision
+($0.8959$) and lowest FPR ($0.7646\%$), but macro-recall falls to $0.8707$ and
+FN increases to 353. Head selection is retained because it has the strongest
+macro-F1, class-1 F1, and positive coverage while remaining deterministic and
+compatible with causal deployment.
+
+\subsection{Stage~1 Answer to RQ1}
+\label{subsubsec:results_rq1}
+
+The controlled Stage~1 results support RQ1. Packet order and cumulative time
+provide complementary information, and their combination outperforms the
+recurrent and convolutional baselines by macro-F1 and PR-AUC. The result is not
+explained solely by parameter count because the larger BiLSTM performs worse.
+The sensitivity analysis also qualifies the finding: the advantage depends on
+a moderate packet budget and stable selection rule; simply providing more
+packets does not guarantee better detection.
+
+\section{Stage~2: Inter-Flow Context}
+\label{subsec:results_stage2}
+
+\subsection{Gain over Independent Flow Classification}
+\label{subsubsec:results_hierarchical_gain}
+
+Table~\ref{tab:results_hierarchical_gain} gives the principal hierarchical
+comparison. Both rows use exactly the same 84,380-flow test manifest. The first
+row classifies the Scheme C embedding independently, while the second adds
+causal source-host context to the frozen Stage~1 representation.
+
+\begin{table}[htbp]
+    \centering
+    \caption{Independent Stage~1 classification and the complete hierarchical
+    system on the common full-data manifest.}
+    \label{tab:results_hierarchical_gain}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{@{}lrrrrrrrl@{}}
+        \toprule
+        Model & $P_{\mathrm{macro}}$ & $R_{\mathrm{macro}}$ &
+        $F_{1,\mathrm{macro}}$ & $F_{1,1}$ & ROC-AUC & PR-AUC & FPR (\%) &
+        TN/FP/FN/TP \\
+        \midrule
+        Stage~1 Scheme C & 0.8990 & 0.8919 & 0.8954 & 0.7994 & 0.9890 &
+        0.8763 & 0.8249 & 80,193/667/732/2,788 \\
+        Stage~2 source-host & \textbf{0.9328} & \textbf{0.9224} &
+        \textbf{0.9275} & \textbf{0.8610} & \textbf{0.9938} &
+        \textbf{0.9345} & \textbf{0.5429} & 80,421/439/527/2,993 \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+Adding source-host context raises macro-F1 by $0.0321$, macro-precision by
+$0.0338$, macro-recall by $0.0305$, class-1 F1 by $0.0616$, and PR-AUC by
+$0.0582$. It simultaneously removes 228 FP and 205 FN. FPR falls from
+$0.8249\%$ to $0.5429\%$, a relative reduction of approximately $34.2\%$.
+Because both error types improve on the same flows, the gain is not merely a
+threshold-induced exchange between precision and recall. The smaller ROC-AUC
+increase ($0.0048$) is expected in this imbalanced setting; PR-AUC exposes the
+improvement in positive retrieval more clearly.
+
+\subsection{Which Relation Defines Useful Context?}
+\label{subsubsec:results_context_relation}
+
+Figure~\ref{fig:results_stage2_context} combines ranking performance with the
+operational recall--FPR trade-off. The left panel compares macro-F1 and PR-AUC;
+the right panel places each context relation according to class-1 recall and
+false-positive rate.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage2_context_analysis.pdf}
+    \caption{Stage~2 context-relation ablation at $W=128$. Left: macro-F1 and
+    PR-AUC. Right: class-1 recall versus FPR, where the desirable region is the
+    upper-left corner.}
+    \label{fig:results_stage2_context}
+\end{figure}
+
+Source-host context provides the strongest overall balance, with macro-F1
+$0.9275$, PR-AUC $0.9345$, class-1 F1 $0.8610$, ROC-AUC $0.9938$, and the
+lowest FPR ($0.5429\%$). It exceeds destination-host and time-only context by
+$0.0079$ and $0.0074$ macro-F1, respectively, while reducing both FP and FN in
+both comparisons. This suggests that recent behavior associated with the
+initiating host is more discriminative than global recency or destination
+identity alone. The result is consistent with work showing that relational or
+window-level traffic structure can reveal behavior omitted by independent-flow
+classifiers \cite{Deng2023FlowTopology,MartinReizabal2026FlowWindow}.
+
+Endpoint context occupies a different operating regime. It has the highest
+macro-recall ($0.9387$) and class-1 recall ($0.8861$), missing only 401
+positives, but it also produces 702 FP and the highest FPR ($0.8682\%$).
+Source-host context removes 263 of those false alerts and increases macro-F1 by
+$0.0061$, at the cost of 126 additional FN. Endpoint context may therefore be
+preferable when missed attacks are far more costly than analyst workload;
+source-host context is the better default under the thesis's macro-F1
+criterion. Time-only context has the second-lowest FPR but the weakest PR-AUC
+and the largest FN count, showing that temporal proximity without an entity
+relation is insufficient.
+
+\subsection{How Much Context Is Useful?}
+\label{subsubsec:results_context_window}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage2_window_sensitivity.pdf}
+    \caption{Source-host context-window sensitivity. Left: macro-F1 and
+    PR-AUC. Right: false-positive and false-negative counts. The dashed line
+    marks the selected window $W=128$.}
+    \label{fig:results_stage2_window}
+\end{figure}
+
+As shown in Figure~\ref{fig:results_stage2_window}, the response to context
+length is non-monotonic. $W=32$ gives the highest macro-recall ($0.9310$) and
+only 452 FN, but also generates 775 FP and the highest FPR ($0.9584\%$). At
+$W=128$, macro-F1 rises to $0.9275$ and PR-AUC to $0.9345$, while FP falls to
+439. Relative to $W=256$, the selected window removes 121 FP and 45 FN and
+improves macro-F1 by $0.0116$. Thus, more history is not automatically more
+informative: older or weakly related source-host flows can dilute the evidence,
+whereas a window of 128 retains sufficient recent context without excessive
+noise.
+
+\subsection{Stage~2 Architecture Comparison}
+\label{subsubsec:results_stage2_architecture_comparison}
+
+The architecture comparison holds the Stage~1 embeddings, source-host
+relation, $W=128$, online causal policy, training objective, optimizer,
+sampling rule, checkpoint criterion, and validation threshold search fixed.
+The model-specific encoder and its dimensions are changed. The six models are
+presented graphically in Figure~\ref{fig:results_stage2_architectures}; the
+second panel displays FP and FN directly so that a higher F1 score cannot hide
+an unfavorable error trade-off.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage2_architecture_comparison.pdf}
+    \caption{Stage~2 architecture comparison on the common 84,380-flow test
+    manifest. Left: macro-F1, class-1 F1, and PR-AUC. Right: threshold-dependent
+    false-positive and false-negative counts. Truncated score axes are labelled.}
+    \label{fig:results_stage2_architectures}
+\end{figure}
+
+The proposed target-query gated model is best in macro-precision ($0.9328$),
+macro-F1 ($0.9275$), class-1 F1 ($0.8610$), ROC-AUC ($0.9938$), PR-AUC
+($0.9345$), test loss ($0.019559$), and FPR ($0.5429\%$). CNN+LSTM is the
+strongest baseline by macro-F1 ($0.9097$), GRU by PR-AUC ($0.9141$), and LSTM
+by macro-recall ($0.9243$). The proposed model improves over these respective
+best baseline values by $0.0179$ macro-F1 and $0.0204$ PR-AUC, while its
+macro-recall is only $0.0019$ below LSTM.
+
+The confusion matrices clarify this balance. Compared with the vanilla
+Transformer, the proposed model removes 177 FP and 117 FN. Compared with GRU,
+it removes 127 FP and 116 FN; compared with CNN+LSTM, it removes 75 FP and 150
+FN. LSTM detects 28 more positives than the proposed model, but produces 338
+additional false alerts. Therefore, the proposed model's F1 gain does not come
+from sacrificing positive coverage for precision.
+
+The comparison with vanilla self-attention also supports the target-query
+design. Vanilla attention updates the complete context sequence and classifies
+the last valid token, whereas the proposed model uses the current flow as the
+query, summarizes eligible history, and injects the update through a learned
+feature-wise gate. The proposed model gains $0.0213$ macro-F1, $0.0407$
+class-1 F1, and $0.0272$ PR-AUC over vanilla attention. This supports, but does
+not alone prove, the value of the inductive bias because their parameter counts
+differ.
+
+The no-context head provides a current-flow-only lower bound. The proposed
+model improves macro-F1 by $0.0331$, class-1 F1 by $0.0631$, and PR-AUC by
+$0.0559$, while reducing FPR from $1.0648\%$ to $0.5429\%$. However, the
+no-context head has only 514 parameters, compared with 283,522 for the proposed
+model. A capacity-matched confirmatory ablation should retain the target-query
+architecture while masking all historical tokens before attributing the full
+gain causally to context.
+
+\paragraph{PR-AUC versus a precision--recall curve.}
+PR-AUC is a scalar area and cannot itself be drawn as a curve. The left panel
+of Figure~\ref{fig:results_stage2_architectures} therefore presents PR-AUC as
+bars. A genuine precision--recall curve requires every test flow's label and
+predicted probability across thresholds. The aggregate PR-AUC values and
+confusion matrices are insufficient to reconstruct that curve. The final
+experiment archive should retain aligned \texttt{stage2\_predictions\_test.csv}
+files for all six models; when these files are available, the following figure
+is included automatically.
+
+\IfFileExists{\resultsfigurepath/stage2_pr_curves.pdf}{%
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.78\textwidth]{\resultsfigurepath/stage2_pr_curves.pdf}
+    \caption{Precision--recall curves for the Stage~2 architecture comparison.
+    Each legend entry reports average precision on the same aligned test flows.}
+    \label{fig:results_stage2_pr_curves}
+\end{figure}
+}{}
+
+\subsection{Efficiency and Operational Trade-Offs}
+\label{subsec:results_statistical_efficiency}
+
+Figure~\ref{fig:results_stage2_efficiency} relates parameter count to measured
+model-evaluation latency and annotates macro-F1. A logarithmic parameter axis
+is used because model sizes range from 514 to more than 1.2 million parameters.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.88\textwidth]{\resultsfigurepath/stage2_efficiency.pdf}
+    \caption{Stage~2 performance--efficiency trade-off. Latency covers model
+    evaluation after Stage~1 embeddings and context indices have been built; it
+    is not end-to-end PCAP-to-alert latency.}
+    \label{fig:results_stage2_efficiency}
+\end{figure}
+
+The no-context head is the smallest and fastest model, with 514 parameters and
+0.1812~ms per flow, but it also has the weakest macro-F1 and PR-AUC. The
+proposed model uses 283,522 parameters and 0.1965~ms per flow, corresponding to
+approximately 5,089 flows per second. Its latency is effectively identical to
+the vanilla Transformer's 0.1967~ms; the 0.0002~ms difference is too small for
+a practical speed claim. This profile is consistent with computing one
+target-to-history query instead of updating every context token.
+
+Relative to GRU, LSTM, and CNN+LSTM, the proposed model uses $59.0\%$,
+$69.3\%$, and $76.7\%$ fewer parameters, respectively. Its measured latency is
+lower by $42.2\%$, $43.3\%$, and $45.2\%$. These values describe the model
+forward pass only. They constitute controlled efficiency comparisons only if
+all profiles were collected on the same accelerator and software stack;
+otherwise, a hardware-matched T4 or L4 timing run is required. Stage~2 training
+time, context-index construction, Stage~1 inference, CSV extraction, and PCAP
+processing remain outside the reported latency.
+
+\section{Integrated Findings and Research Questions}
+\label{subsec:results_rq_answers}
+
+\paragraph{RQ1: intra-flow temporal representation.}
+The results support the claim that packet-sequence modeling benefits from both
+order and elapsed time. The combined encoder has the highest macro-F1 and
+PR-AUC in the controlled Stage~1 architecture block, and removing either
+encoding weakens performance. The selected 128-packet head strategy provides
+the strongest overall error balance. The controlled fusion experiment further
+shows that bounded token-FiLM integration improves over both tiled flow
+statistics and the packet-only branch, reaching macro-F1 $0.8955$ and PR-AUC
+$0.8763$ while reducing both FP and FN relative to Scheme B. On the same class
+composition, the position+time packet model also substantially outperforms the
+flow-statistics MLP. The conclusion is still specific to this organizational
+capture and does not by itself establish cross-dataset generalization.
+
+\paragraph{RQ2: inter-flow contextual reasoning.}
+The current evidence supports the usefulness of causal cross-flow context.
+Relative to independent Stage~1 classification on the same full manifest,
+source-host Stage~2 context raises macro-F1 from $0.8954$ to $0.9275$, raises
+PR-AUC from $0.8763$ to $0.9345$, and reduces both FP and FN. The target-query
+gated architecture also outperforms no-context, vanilla Transformer, LSTM,
+GRU, and CNN+LSTM alternatives. Source-host relation and $W=128$ provide the
+best balanced operating point, while endpoint context remains a plausible
+high-recall alternative.
+
+\section{Reliability and Validity of the Observed Differences}
+\label{subsec:results_reliability}
+
+The reported experiments are predominantly single-seed runs using seed 130.
+They support ablation and sensitivity observations, but they do not estimate
+training variability. Neural-model rankings can vary with initialization and
+mini-batch order \cite{ReimersGurevych2017,Bouthillier2021Variance}; small gaps,
+such as the $0.0016$ macro-F1 difference between head and head-tail selection,
+must therefore be treated as descriptive rather than statistically reliable.
+
+Confidence intervals, paired bootstrap tests, and McNemar tests cannot be
+reconstructed from aggregate metrics. They require aligned per-flow
+probabilities and predictions for every model. The final confirmatory study
+should run three to five seeds, archive each validation-selected threshold,
+retain test probabilities, and report mean, standard deviation, and paired
+uncertainty intervals. The resolved YAML for the vanilla Transformer and exact
+accelerator identity for every efficiency run should also be archived. Until
+then, the larger Stage~2 gains are strong empirical observations, but no claim
+of statistical significance is made.
+
+\section{Chapter Summary}
+\label{subsec:results_summary}
+
+Stage~1 shows that packet position and cumulative time encode complementary
+intra-flow evidence. The position+time Transformer reaches macro-F1 $0.8882$
+and PR-AUC $0.8564$ on the controlled 35,410-flow manifest, with $L=128$ and
+head selection providing the most balanced configuration. On that same
+manifest, separate bounded token-FiLM fusion further raises macro-F1 to
+$0.8955$ and PR-AUC to $0.8763$, with only 267 FP and 293 FN. On the separate
+full 84,380-flow manifest, causal source-host context produces the largest
+observed hierarchical gain: macro-F1 increases by 3.21 percentage points,
+PR-AUC by 5.82 points, and FPR falls from $0.8249\%$ to $0.5429\%$ while FN
+also decreases.
+
+The architecture benchmark further shows that target-query gated attention
+outperforms no-context, vanilla Transformer, LSTM, GRU, and CNN+LSTM controls
+by macro-F1 and PR-AUC. It achieves nearly the same model-level latency as the
+vanilla Transformer and is substantially smaller and faster than the recurrent
+alternatives. These findings support the hierarchical design while also
+identifying the remaining evidence needed for the final thesis: repeated-seed
+statistics, a capacity-matched no-context ablation, aligned prediction files
+for PR curves and paired tests, and hardware-matched end-to-end timing.

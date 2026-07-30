@@ -1,0 +1,37 @@
+{
+  "best_model_path": "/content/drive/MyDrive/s1/0626_B/attention_pooling_mild/seqLen64headstage1_best_model.pt",
+  "best_epoch": 68,
+  "best_score": 0.867013822315376,
+  "test_metrics": {
+    "accuracy": 0.9824625811917538,
+    "macro_precision": 0.8823063114891148,
+    "macro_recall": 0.8903733273586942,
+    "macro_f1": 0.8862933041003522,
+    "weighted_precision": 0.9826534488600873,
+    "weighted_recall": 0.9824625811917538,
+    "weighted_f1": 0.9825541287916258,
+    "precision_label1": 0.7732962447844228,
+    "recall_label1": 0.7903340440653873,
+    "f1_label1": 0.7817223198594024,
+    "auc": 0.986107198075106,
+    "pr_auc": 0.8560708874814472,
+    "per_class_f1": {
+      "0": 0.9908642883413019,
+      "1": 0.7817223198594024
+    },
+    "confusion_matrix": [
+      [
+        33677,
+        326
+      ],
+      [
+        295,
+        1112
+      ]
+    ],
+    "num_classes": 2,
+    "num_samples": 35410,
+    "loss": 0.054766101191082585,
+    "threshold": 0.43000000000000027
+  }
+}

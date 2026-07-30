@@ -1,0 +1,665 @@
+% Preamble requirements:
+% \usepackage{amsmath,amssymb,booktabs,array,longtable,enumitem,tikz}
+% \usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+%
+% Bibliography files used by this section:
+%   the proposal references.bib
+%   doc/related_work_additions.bib
+%   doc/dataset_preprocessing_additions.bib
+
+\providecommand{\datasetfield}[1]{\texttt{\detokenize{#1}}}
+
+\section{Dataset Construction and Preprocessing}
+\label{sec:dataset_preprocessing}
+
+This section describes how the proprietary packet capture was converted into
+the two aligned data views required by the proposed hierarchical detector. The
+description distinguishes among (i) fields retained in the raw CSV files,
+(ii) predictors supplied to the Stage~1 model, and (iii) identifiers retained
+only for constructing Stage~2 context. This distinction is important because a
+field can be useful for record linkage without being an appropriate learning
+feature. It also makes explicit which operations are fitted on training data
+and which operations are deterministic transformations of the capture.
+Careful documentation of provenance, labels, transformations, and partitions
+is essential for credible NIDS evaluation
+\cite{Shiravi2012DatasetGeneration,Ring2019Datasets,Goldschmidt2025Datasets,
+Pinto2025DatasetReview}.
+
+\subsection{Data Provenance and Scope}
+\label{subsec:data_provenance}
+
+The experiments use the packet capture
+\datasetfield{ar002_et12_20260511_001.pcap}, whose file size is approximately
+$8.62\,\mathrm{GB}$. The trace was supplied by a company colleague after being
+downloaded from the company network with an organizational traffic-collection
+tool. The thesis author therefore starts from an already acquired PCAP rather
+than generating traffic in a laboratory testbed. Unlike CICIDS-style datasets,
+in which benign profiles and attacks are deliberately executed under a
+controlled schedule \cite{Sharafaldin2018CICIDS}, this capture represents
+naturally occurring enterprise traffic as observed by the collection point.
+It may consequently provide greater environmental realism, but its traffic
+mix, host population, visibility, and attack coverage are specific to one
+organization and one capture period.
+
+The dataset is proprietary and is not presented as a public benchmark. The raw
+PCAP and CSV files contain network identifiers, including IP addresses and
+ports, that can be sensitive. Accordingly, this thesis reports only aggregate
+statistics and does not print individual addresses. Any artifact released
+outside the authorized environment should replace host identifiers with
+consistent pseudonyms, remove unnecessary endpoint fields, and be reviewed
+against the company's data-governance policy. Consistent pseudonyms are
+preferable to deleting all identifiers because Stage~2 requires equality tests
+between host identifiers; the mapping itself need not be released. The current
+extraction code retains raw addresses in local metadata, so pseudonymization is
+a release requirement rather than a claimed property of the present CSV files.
+
+\subsection{PCAP-to-CSV Extraction}
+\label{subsec:pcap_extraction}
+
+The PCAP is replayed through Suricata, an open-source network threat detection
+engine \cite{Roesch1999,SuricataGuide2026}. A custom C output plugin located at
+\datasetfield{suricata-plugin/custom-out.c} registers both a packet logger and
+a flow logger. Suricata exposes low-level packet and flow logging interfaces to
+custom output modules; the plugin uses these interfaces to emit two CSV files
+in one processing pass. This design avoids reconstructing packet-to-flow
+membership in a separate tool and preserves a shared bidirectional
+\datasetfield{flow_id} across both views.
+
+Figure~\ref{fig:data_construction_pipeline} summarizes the data-construction
+path. Packet rows preserve within-flow order and microsecond timestamps, while
+the flow logger maintains online aggregates and writes one statistical record
+per completed flow. The flow schema follows the broad feature families used by
+CICFlowMeter/CICIDS-style data, while adding explicit indicators for whether
+the initial forward and backward TCP window values are available
+\cite{Sharafaldin2018CICIDS}.
+
+\begin{figure}[t]
+    \centering
+    \begin{tikzpicture}[
+        node distance=7mm and 8mm,
+        block/.style={draw, rectangle, rounded corners=2pt, align=center,
+                      minimum height=9mm, text width=29mm, font=\small},
+        smallblock/.style={draw, rectangle, rounded corners=2pt, align=center,
+                           minimum height=9mm, text width=27mm, font=\small},
+        arrow/.style={-{Latex[length=2mm]}, thick}
+    ]
+        \node[block] (pcap) {Enterprise PCAP\\$8.62\,\mathrm{GB}$};
+        \node[block, right=of pcap] (suricata) {Suricata + custom\\output plugin};
+        \node[smallblock, above right=5mm and 9mm of suricata] (packet) {Packet CSV\\$11{,}750{,}727\times40$};
+        \node[smallblock, below right=5mm and 9mm of suricata] (flow) {Flow CSV\\$421{,}898\times77$};
+        \node[block, right=9mm of packet] (align) {Integrity checks and\\\datasetfield{flow_id} alignment};
+        \node[block, below=of align] (split) {Chronological\\flow-level split};
+        \node[block, below=of split] (tensor) {Train-fitted transforms\\and model tensors};
+
+        \draw[arrow] (pcap) -- (suricata);
+        \draw[arrow] (suricata) -- (packet);
+        \draw[arrow] (suricata) -- (flow);
+        \draw[arrow] (packet) -- (align);
+        \draw[arrow] (flow) -- (align);
+        \draw[arrow] (align) -- (split);
+        \draw[arrow] (split) -- (tensor);
+    \end{tikzpicture}
+    \caption{Construction and preprocessing path from the proprietary PCAP to
+    Stage~1 tensors and Stage~2 metadata.}
+    \label{fig:data_construction_pipeline}
+\end{figure}
+
+No raw application payload bytes are supplied to either learning stage. The
+packet table does contain \datasetfield{payload_len}, which is a scalar length
+derived from packet metadata, but it does not contain payload content. This
+wording is deliberate: the detector is payload-content independent, not
+entirely free of payload-related metadata. Alert signatures, rule identifiers,
+alert messages, and alert counts are also excluded from the predictors.
+
+\subsection{Alert-Derived Label Construction}
+\label{subsec:label_construction}
+
+The custom logger derives binary labels from Suricata's alert state. Let
+$a(p_i)$ denote the number of Suricata alerts attached to packet $p_i$. The
+packet label is
+\begin{equation}
+    y_i^{\mathrm{pkt}}
+    = \mathbb{I}\!\left[a(p_i)>0\right],
+    \label{eq:packet_alert_label}
+\end{equation}
+where $\mathbb{I}[\cdot]$ is the indicator function. A flow is labelled
+positive when at least one of its packets triggers an alert:
+\begin{equation}
+    y_f
+    = \max_{p_i\in\mathcal{P}_f} y_i^{\mathrm{pkt}},
+    \label{eq:flow_alert_label}
+\end{equation}
+where $\mathcal{P}_f$ is the set of packets assigned to flow $f$. Thus,
+\datasetfield{packet_label}=1 indicates an alert-triggering packet and
+\datasetfield{label}=1 indicates an alert-associated flow.
+
+These are programmatic or \emph{weak} labels rather than independent expert
+ground truth \cite{Ratner2017Snorkel}. In particular, label~0 means that the
+configured Suricata rules did not generate an alert; it does not prove that the
+traffic is benign. Conversely, a positive label inherits any false positives
+of the deployed ruleset. The experiments therefore measure how well the model
+learns and contextualizes Suricata-alert-associated behavior, rather than
+establishing guaranteed detection of every intrusion or zero-day attack.
+Potential label errors can affect both training and test estimates, and this
+limitation must be retained when interpreting the results
+\cite{Northcutt2021ConfidentLearning}.
+
+To prevent direct target leakage, neither \datasetfield{packet_label} nor
+\datasetfield{label} is included in a feature vector. Suricata alert metadata
+is likewise absent from the model input. For reproducibility, the final
+experiment manifest should record the Suricata version, rule-set name and
+version, rule update date, command-line/configuration checksum, custom-plugin
+commit, and PCAP checksum. These items determine the weak-labeling function and
+cannot be reconstructed from the CSV dimensions alone.
+
+\subsection{Raw Dataset Composition}
+\label{subsec:raw_composition}
+
+The extraction produced the two aligned tables summarized in
+Table~\ref{tab:raw_dataset_summary}. The packet table contains
+$11{,}750{,}727$ rows and 40 columns; the flow table contains $421{,}898$ rows
+and 77 columns. Dividing the two row counts gives an average of approximately
+$27.85$ logged packets per flow before sequence truncation. This average does
+not imply that flow lengths are uniform; network packet counts are typically
+heavy-tailed, which motivates an explicit maximum sequence length.
+
+\begin{table}[t]
+    \centering
+    \caption{Raw extracted dataset summary.}
+    \label{tab:raw_dataset_summary}
+    \begin{tabular}{@{}lrrp{5.7cm}@{}}
+        \toprule
+        Data view & Rows & Columns & Primary role \\
+        \midrule
+        Packet CSV & 11,750,727 & 40 & Ordered packet-header, protocol,
+        direction, and inter-arrival observations within flows \\
+        Flow CSV & 421,898 & 77 & One flow-level target, aggregate
+        statistics, and context-construction metadata per flow \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The binary flow-label distribution is shown in
+Table~\ref{tab:flow_label_distribution}. Of the $421{,}898$ flow records,
+$405{,}254$ are labelled 0 and $16{,}644$ are labelled 1. The positive
+prevalence and imbalance ratio are therefore
+\begin{align}
+    \pi_1 &= \frac{16{,}644}{421{,}898} = 0.03945
+             \quad (3.945\%), \\
+    \mathrm{IR} &= \frac{405{,}254}{16{,}644} = 24.35:1.
+    \label{eq:dataset_imbalance}
+\end{align}
+
+\begin{table}[t]
+    \centering
+    \caption{Flow-level alert-derived label distribution.}
+    \label{tab:flow_label_distribution}
+    \begin{tabular}{@{}llrr@{}}
+        \toprule
+        Label & Interpretation & Count & Proportion \\
+        \midrule
+        0 & No Suricata alert observed in the flow & 405,254 & 96.055\% \\
+        1 & At least one alert-triggering packet & 16,644 & 3.945\% \\
+        \midrule
+        Total & & 421,898 & 100.000\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+An always-negative classifier would consequently obtain approximately
+$96.055\%$ accuracy while detecting no positive flows. Accuracy and weighted
+averages are therefore secondary metrics for this dataset. The evaluation
+focuses on macro-precision, macro-recall, macro-F1, ROC-AUC, PR-AUC, the
+confusion matrix, and the false-positive rate. PR-AUC is particularly useful
+when the positive class is rare \cite{SaitoRehmsmeier2015}. The large benign
+population also makes the false-positive rate operationally important: a small
+percentage of $405{,}254$ negative flows can still produce a substantial alert
+volume.
+
+\subsection{Raw Packet and Flow Schemas}
+\label{subsec:raw_schemas}
+
+Tables~\ref{tab:packet_schema} and~\ref{tab:flow_schema} group all raw columns
+by function. The grouping is descriptive; it does not imply that every raw
+column is used as a predictor.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}
+                         >{\raggedright\arraybackslash}p{0.75\textwidth}@{}}
+    \caption{Complete packet CSV schema grouped by function.}
+    \label{tab:packet_schema} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+    Record identity and time &
+    \datasetfield{record_type}, \datasetfield{packet_id},
+    \datasetfield{timestamp_us}, \datasetfield{ts_sec},
+    \datasetfield{ts_usec}, \datasetfield{flow_id} \\
+    Endpoints and protocol &
+    \datasetfield{direction}, \datasetfield{ip_version},
+    \datasetfield{src_ip}, \datasetfield{dst_ip},
+    \datasetfield{src_port}, \datasetfield{dst_port},
+    \datasetfield{protocol}, \datasetfield{l7_proto} \\
+    Length and header metadata &
+    \datasetfield{pkt_len}, \datasetfield{ip_len},
+    \datasetfield{payload_len}, \datasetfield{ttl_or_hop_limit},
+    \datasetfield{tcp_window}, \datasetfield{tcp_header_len},
+    \datasetfield{udp_len} \\
+    Transport indicators &
+    \datasetfield{has_tcp}, \datasetfield{has_udp},
+    \datasetfield{has_icmp} \\
+    TCP state and flags &
+    \datasetfield{tcp_seq}, \datasetfield{tcp_ack},
+    \datasetfield{tcp_flags}, \datasetfield{tcp_fin},
+    \datasetfield{tcp_syn}, \datasetfield{tcp_rst},
+    \datasetfield{tcp_psh}, \datasetfield{tcp_ack_flag},
+    \datasetfield{tcp_urg}, \datasetfield{tcp_ece},
+    \datasetfield{tcp_cwr} \\
+    ICMP metadata &
+    \datasetfield{icmp_type}, \datasetfield{icmp_code} \\
+    Inter-arrival time &
+    \datasetfield{flow_iat_us}, \datasetfield{direction_iat_us} \\
+    Target &
+    \datasetfield{packet_label} \\
+\end{longtable}
+
+The two packet timing fields have different semantics.
+\datasetfield{flow_iat_us} is the elapsed time from the previous packet in the
+same bidirectional flow, whereas \datasetfield{direction_iat_us} is measured
+from the previous packet in the same direction. Both use microseconds and are
+zero for the first applicable observation.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}
+                         >{\raggedright\arraybackslash}p{0.75\textwidth}@{}}
+    \caption{Complete flow CSV schema grouped by function.}
+    \label{tab:flow_schema} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+    Identity and time &
+    \datasetfield{flow_id}, \datasetfield{flow_start_timestamp_us},
+    \datasetfield{flow_end_timestamp_us} \\
+    Endpoints and protocol &
+    \datasetfield{source_ip}, \datasetfield{source_port},
+    \datasetfield{destination_ip}, \datasetfield{destination_port},
+    \datasetfield{protocol} \\
+    Directional volume &
+    \datasetfield{total_fwd_packets}, \datasetfield{total_backward_packets},
+    \datasetfield{total_length_of_fwd_packets},
+    \datasetfield{total_length_of_bwd_packets} \\
+    Directional length statistics &
+    \datasetfield{fwd_packet_length_max},
+    \datasetfield{fwd_packet_length_min},
+    \datasetfield{fwd_packet_length_mean},
+    \datasetfield{fwd_packet_length_std},
+    \datasetfield{bwd_packet_length_max},
+    \datasetfield{bwd_packet_length_min},
+    \datasetfield{bwd_packet_length_mean},
+    \datasetfield{bwd_packet_length_std} \\
+    Overall rate and timing &
+    \datasetfield{flow_duration}, \datasetfield{flow_bytes_per_s},
+    \datasetfield{flow_packets_per_s}, \datasetfield{flow_iat_mean},
+    \datasetfield{flow_iat_std}, \datasetfield{flow_iat_max},
+    \datasetfield{flow_iat_min} \\
+    Directional inter-arrival time &
+    \datasetfield{fwd_iat_total}, \datasetfield{fwd_iat_mean},
+    \datasetfield{fwd_iat_std}, \datasetfield{fwd_iat_max},
+    \datasetfield{fwd_iat_min}, \datasetfield{bwd_iat_total},
+    \datasetfield{bwd_iat_mean}, \datasetfield{bwd_iat_std},
+    \datasetfield{bwd_iat_max}, \datasetfield{bwd_iat_min} \\
+    Directional flags, headers, and rates &
+    \datasetfield{fwd_psh_flags}, \datasetfield{bwd_psh_flags},
+    \datasetfield{fwd_urg_flags}, \datasetfield{bwd_urg_flags},
+    \datasetfield{fwd_header_length}, \datasetfield{bwd_header_length},
+    \datasetfield{fwd_packets_per_s}, \datasetfield{bwd_packets_per_s} \\
+    Overall packet-length distribution &
+    \datasetfield{min_packet_length}, \datasetfield{max_packet_length},
+    \datasetfield{packet_length_mean}, \datasetfield{packet_length_std},
+    \datasetfield{packet_length_variance} \\
+    TCP flag counts &
+    \datasetfield{fin_flag_count}, \datasetfield{syn_flag_count},
+    \datasetfield{rst_flag_count}, \datasetfield{psh_flag_count},
+    \datasetfield{ack_flag_count}, \datasetfield{urg_flag_count},
+    \datasetfield{cwe_flag_count}, \datasetfield{ece_flag_count} \\
+    Ratios, segments, and initial windows &
+    \datasetfield{down_up_ratio}, \datasetfield{average_packet_size},
+    \datasetfield{avg_fwd_segment_size},
+    \datasetfield{avg_bwd_segment_size},
+    \datasetfield{has_init_win_bytes_forward},
+    \datasetfield{init_win_bytes_forward},
+    \datasetfield{has_init_win_bytes_backward},
+    \datasetfield{init_win_bytes_backward},
+    \datasetfield{act_data_pkt_fwd}, \datasetfield{min_seg_size_forward} \\
+    Active and idle periods &
+    \datasetfield{active_mean}, \datasetfield{active_std},
+    \datasetfield{active_max}, \datasetfield{active_min},
+    \datasetfield{idle_mean}, \datasetfield{idle_std},
+    \datasetfield{idle_max}, \datasetfield{idle_min} \\
+    Target & \datasetfield{label} \\
+\end{longtable}
+
+For a non-TCP packet, TCP-specific values are represented by zero and the
+\datasetfield{has_tcp} indicator disambiguates ``not applicable'' from an
+observed zero. The same principle is used for UDP and ICMP presence. For flow
+records, \datasetfield{has_init_win_bytes_forward} and
+\datasetfield{has_init_win_bytes_backward} indicate whether the corresponding
+initial-window measurements are available; unavailable window values are
+stored as zero.
+
+\subsection{Integrity Checks and Packet--Flow Alignment}
+\label{subsec:data_integrity}
+
+The preprocessing code first normalizes column names and removes
+\datasetfield{record_type}, which is a logging descriptor rather than a
+predictor. Positive and negative infinity are converted to missing values.
+Rows with a missing or zero \datasetfield{flow_id} are removed. Flow rows must
+also have a nonzero, nonmissing \datasetfield{flow_start_timestamp_us}, and
+packet rows must have a nonzero, nonmissing \datasetfield{timestamp_us}.
+
+The flow table is required to contain at most one effective row per
+\datasetfield{flow_id}. If duplicate flow identifiers occur, records are
+stably ordered by flow identifier and start time and the first row is retained;
+the duplicate count is logged. The pipeline then computes the intersection of
+flow identifiers found in the packet and flow tables and removes unmatched
+records from both sides. Finally, packet records are sorted by
+\datasetfield{flow_id} and \datasetfield{timestamp_us}. These checks establish
+the one-to-many relation
+\begin{equation}
+    f \longleftrightarrow
+    \left\{p_{f,1},p_{f,2},\ldots,p_{f,n_f}\right\},
+    \qquad
+    t_{f,1}\leq t_{f,2}\leq\cdots\leq t_{f,n_f},
+    \label{eq:packet_flow_alignment}
+\end{equation}
+before any split or feature transformation is performed. The counts in
+Table~\ref{tab:raw_dataset_summary} describe the extracted CSV files; the saved
+split report is the authoritative source for post-cleaning counts in a
+particular run.
+
+\subsection{Feature Selection and Leakage Control}
+\label{subsec:feature_selection}
+
+The model input is configuration-controlled rather than obtained by passing all
+raw columns to the network. Table~\ref{tab:stage1_packet_features} lists the 23
+raw packet predictors used in the principal Stage~1 configuration before
+one-hot expansion. Numerical fields describe packet and header sizes; categorical
+fields describe protocol states; and binary fields retain packet direction,
+transport presence, and individual TCP flags.
+
+\begin{table}[t]
+    \centering
+    \caption{Packet predictors used by the principal Stage~1 configuration.}
+    \label{tab:stage1_packet_features}
+    \small
+    \begin{tabular}{@{}p{2.5cm}p{11.4cm}@{}}
+        \toprule
+        Type & Selected raw columns \\
+        \midrule
+        Numerical (7) &
+        \datasetfield{pkt_len}, \datasetfield{ip_len},
+        \datasetfield{payload_len}, \datasetfield{ttl_or_hop_limit},
+        \datasetfield{tcp_window}, \datasetfield{tcp_header_len},
+        \datasetfield{udp_len} \\
+        Categorical (4) &
+        \datasetfield{ip_version}, \datasetfield{protocol},
+        \datasetfield{icmp_type}, \datasetfield{icmp_code} \\
+        Binary (12) &
+        \datasetfield{direction}, \datasetfield{has_tcp},
+        \datasetfield{has_udp}, \datasetfield{has_icmp},
+        \datasetfield{tcp_fin}, \datasetfield{tcp_syn},
+        \datasetfield{tcp_rst}, \datasetfield{tcp_psh},
+        \datasetfield{tcp_ack_flag}, \datasetfield{tcp_urg},
+        \datasetfield{tcp_ece}, \datasetfield{tcp_cwr} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Raw IP addresses, ports, packet/flow identifiers, absolute timestamps, TCP
+sequence and acknowledgment numbers, the combined TCP flag integer,
+\datasetfield{l7_proto}, and both target columns are excluded from the Stage~1
+predictor matrix. This avoids memorizing site-specific addresses and reduces
+the risk that identifiers or absolute capture position become shortcuts for
+the target. The principal time tensor is instead derived from
+\datasetfield{flow_iat_us}, preserving relative packet timing without exposing
+the absolute capture timestamp as an ordinary feature.
+
+For Stage~1 configurations with statistical fusion, a configured subset of the
+flow measurements in Table~\ref{tab:flow_schema} is transformed separately.
+The principal fusion configuration includes duration, directional packet and
+byte counts, packet-length statistics, rates, inter-arrival statistics, flag
+counts, header lengths, segment/window measurements, and selected active-period
+statistics. The two initial-window availability indicators are treated as
+binary features. Endpoint identifiers, endpoint ports, absolute flow times,
+and \datasetfield{label} are not part of this statistical vector. The
+packet-only ablation disables this flow branch entirely; therefore, raw schema
+availability must not be confused with feature use in every experiment.
+
+The fields \datasetfield{flow_start_timestamp_us}, \datasetfield{source_ip},
+and \datasetfield{destination_ip} are exported alongside each Stage~1
+embedding for Stage~2. They are relationship metadata, not Stage~1 predictors.
+Stage~2 compares host identifiers to construct source-host,
+destination-host, or endpoint contexts and uses start time to enforce temporal
+order. It does not one-hot encode raw addresses as semantic model features and
+does not retrieve labels into a context window. This separation limits
+identity memorization while preserving the relations required by the proposed
+inter-flow model.
+
+\subsection{Train-Fitted Feature Transformations}
+\label{subsec:feature_transformations}
+
+All data-dependent transformations are fitted on the training partition only
+and then reused without refitting on validation and test data. This ordering is
+necessary because fitting clipping bounds, scales, or category vocabularies on
+the complete dataset would leak information about future partitions
+\cite{Arp2022DosDonts}. Packet and flow numerical features use the same type of
+pipeline but have separate fitted parameters.
+
+\paragraph{Numerical features.}
+Values are converted to numeric form and non-finite values are mapped to
+missing. Selected nonnegative, heavy-tailed features are transformed as
+\begin{equation}
+    \widetilde{x}=\log(1+\max(x,0)).
+    \label{eq:log1p_preprocessing}
+\end{equation}
+The configured log transform covers packet lengths, payload length, TCP window,
+header length, and UDP length, together with many count, duration, byte, rate,
+and inter-arrival flow statistics. Missing values are then filled with zero.
+
+For each numerical feature $j$, the training partition provides lower and
+upper quantiles $q_{0.001,j}^{\mathrm{tr}}$ and
+$q_{0.999,j}^{\mathrm{tr}}$. Values in every split are winsorized by
+\begin{equation}
+    x_{ij}^{\mathrm{clip}}
+    = \min\!\left(
+        \max\!\left(\widetilde{x}_{ij},q_{0.001,j}^{\mathrm{tr}}\right),
+        q_{0.999,j}^{\mathrm{tr}}
+      \right).
+    \label{eq:quantile_clipping}
+\end{equation}
+The principal configuration subsequently applies robust scaling:
+\begin{equation}
+    x_{ij}^{\mathrm{scaled}}
+    = \frac{x_{ij}^{\mathrm{clip}}-
+             \operatorname{median}_{\mathrm{tr}}(x_j)}
+            {\operatorname{IQR}_{\mathrm{tr}}(x_j)},
+    \label{eq:robust_scaling}
+\end{equation}
+where the denominator is the training interquartile range. Log compression,
+tail clipping, and robust scaling together reduce the influence of extreme
+traffic bursts without using test statistics.
+
+\paragraph{Categorical features.}
+Missing categorical values are represented by the explicit token
+\datasetfield{MISSING}. A one-hot encoder is fitted on training categories,
+and unseen validation or test categories are ignored rather than causing an
+error or expanding the model input dimension.
+
+\paragraph{Binary features.}
+Binary fields are converted to numeric form, non-finite and missing entries are
+set to zero, positive values are mapped to one, and all other values are mapped
+to zero. Binary variables are not one-hot encoded, log-transformed, clipped, or
+scaled.
+
+\subsection{Packet-Sequence Construction}
+\label{subsec:sequence_construction}
+
+For each aligned flow $f$, packets are ordered by
+\datasetfield{timestamp_us}. The principal configuration uses a maximum
+sequence length $L=128$ and the \datasetfield{head} selection strategy. If
+$n_f>L$, the first 128 packets are retained; if $n_f<L$, the sequence is
+right-padded with zeros. A Boolean mask identifies valid positions so that
+padding does not contribute to attention or pooling. The resulting arrays have
+the forms
+\begin{equation}
+    \mathbf{X}\in\mathbb{R}^{N\times L\times d_p},\qquad
+    \mathbf{T}\in\mathbb{R}^{N\times L},\qquad
+    \mathbf{M}\in\{0,1\}^{N\times L},
+    \label{eq:stage1_tensor_shapes}
+\end{equation}
+where $d_p$ is the transformed packet-feature dimension after one-hot
+encoding.
+
+The timing tensor is computed from the nonnegative within-flow inter-arrival
+time:
+\begin{equation}
+    T_{f,i}=\log\!\left(1+max(Delta t_{f,i},0)\right),
+    \qquad
+    \Delta t_{f,i}=\datasetfield{flow_iat_us}(p_{f,i}).
+    \label{eq:time_tensor}
+\end{equation}
+It is supplied separately to the time-aware encoding rather than concatenated
+with absolute timestamps.
+
+Two alternative truncation strategies are retained for ablation experiments.
+\datasetfield{head_tail} keeps the first $\lfloor L/2\rfloor$ and last
+$L-\lfloor L/2\rfloor$ packets, whereas \datasetfield{random} draws $L$
+packets without replacement using a deterministic seed derived from the global
+seed and \datasetfield{flow_id}. Selected random packets are restored to
+chronological order. Sequence lengths $8,16,32,64,128,$ and $256$ are evaluated
+separately; these ablations change the retained evidence and computational
+cost, but not the underlying flow split.
+
+\subsection{Chronological Train--Validation--Test Partition}
+\label{subsec:chronological_partition}
+
+Splitting is performed at the flow level after sorting unique flows by
+\datasetfield{flow_start_timestamp_us} with a stable ordering. The principal
+configuration assigns the earliest 70\% of flows to training, the next 10\%
+to validation, and the latest 20\% to testing. It sets
+\datasetfield{stratify=false}; therefore, the reported main split uses the
+nominal chronological boundaries and does not move examples to equalize class
+ratios. Assuming the $421{,}898$ aligned flow records reported above, the
+partition sizes are those in Table~\ref{tab:chronological_split}.
+
+\begin{table}[t]
+    \centering
+    \caption{Principal chronological flow partition.}
+    \label{tab:chronological_split}
+    \begin{tabular}{@{}lrrl@{}}
+        \toprule
+        Partition & Ratio & Number of flows & Temporal role \\
+        \midrule
+        Training & 70\% & 295,329 & Earliest flows \\
+        Validation & 10\% & 42,189 & Intermediate flows \\
+        Test & 20\% & 84,380 & Latest flows \\
+        \midrule
+        Total & 100\% & 421,898 & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+All packets belonging to one \datasetfield{flow_id} follow their parent flow,
+so a flow cannot cross partitions. The preprocessing object is fitted only
+with training-flow packets and training-flow statistics. Hyperparameter
+selection, early stopping, and decision-threshold selection use validation
+data; the test partition is reserved for final evaluation. This design is more
+representative of deployment on later traffic than random row splitting and
+reduces leakage caused by mixing packets or temporally adjacent copies of the
+same behavior across partitions \cite{SommerPaxson2010,Arp2022DosDonts}.
+
+The implementation also supports a chronological boundary search within a
+specified tolerance when \datasetfield{stratify=true}. That optional mode
+preserves contiguous time blocks but moves boundaries to reduce class-rate
+differences. It is not active in the principal configuration described here;
+if it is used in an experiment, the actual saved split counts and time ranges
+must replace Table~\ref{tab:chronological_split}.
+
+\subsection{Stage~1 Artifacts Supplied to Stage~2}
+\label{subsec:stage2_artifacts}
+
+After training, Stage~1 exports one learned embedding and one metadata record
+per flow for each partition. The metadata include
+\datasetfield{flow_id}, target label, split name,
+\datasetfield{flow_start_timestamp_us}, source identifier, and destination
+identifier. Stage~2 consumes the embedding as the content representation and
+uses only the time and host identifiers to select eligible historical flows.
+Keeping the original split label with every exported record prevents Stage~2
+from accidentally constructing a context across train, validation, and test
+boundaries. Labels are used as training/evaluation targets and are not included
+among context features.
+
+For reproducibility, each Stage~1 run also stores the selected feature names,
+encoder categories, clipping bounds, scaler parameters, sequence policy,
+random seed, ordered flow identifiers, class counts per partition, model
+configuration, and checkpoint identifier. Stage~2 results are meaningful only
+when they can be traced to the exact Stage~1 checkpoint and split manifest that
+generated the embeddings.
+
+\subsection{Validity, Privacy, and Reproducibility Considerations}
+\label{subsec:dataset_limitations}
+
+The resulting dataset is well suited to evaluating the proposed hierarchy on
+a large, temporally ordered enterprise trace, but four limitations bound the
+claims that can be made from it.
+
+\begin{enumerate}[label=\textbf{L\arabic*:},leftmargin=*]
+    \item \textbf{Alert-derived ground truth.} The labels inherit the coverage
+    and errors of one Suricata ruleset. Negative records are more precisely
+    described as ``no alert observed'' than as verified benign traffic.
+
+    \item \textbf{Single-trace scope.} One company capture cannot by itself
+    establish cross-organization, cross-sensor, or long-term generalization.
+    External-PCAP evaluation is therefore a desirable extension.
+
+    \item \textbf{Capture visibility.} The PCAP contains only traffic visible
+    at the collection point. Packet loss, asymmetric routing, encrypted
+    protocols, and incomplete flows can alter extracted statistics. The
+    capture tool, interface location, capture interval, packet-loss report, and
+    snap length should be documented when organizational policy permits.
+
+    \item \textbf{Sensitive identifiers.} Raw addresses are retained locally
+    to form Stage~2 relations. They must not appear in the thesis, shared CSVs,
+    screenshots, or public metadata. A stable pseudonymization step should be
+    applied before any release and verified not to change equality-based
+    context membership.
+\end{enumerate}
+
+These constraints do not invalidate the experiment, but they determine its
+interpretation. The study evaluates a reproducible model pipeline on a large
+proprietary, weakly labelled capture. It does not claim that Suricata labels
+constitute perfect attack truth, that all zero-day attacks are represented, or
+that performance will transfer unchanged to every enterprise network. Clear
+separation of raw fields, model predictors, context keys, and targets is used
+throughout the remaining methodology and results sections to keep those claims
+appropriately scoped.

@@ -1,0 +1,34 @@
+{
+  "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+  "raw_flow_rows": 475809,
+  "flow_rows_after_required_filter": 475567,
+  "duplicate_flow_id_rows_in_source": 242,
+  "drop_duplicate_flow_ids": true,
+  "source_binary_counts_after_clean": {
+    "0": 265623,
+    "1": 209944
+  },
+  "requested_num_flows": 5000,
+  "requested_min_malicious": 1,
+  "requested_malicious_ratio": null,
+  "sampled_flow_rows_before_packet_check": 5000,
+  "sampled_binary_counts_before_packet_check": {
+    "0": 2793,
+    "1": 2207
+  },
+  "output_order": "original",
+  "packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_packets.csv",
+  "out_packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\subsets\\Wednesday-workingHours-external5000-stage1_packets.csv",
+  "packet_chunks_read": 29,
+  "packet_rows_scanned": 14112668,
+  "packet_rows_kept": 79832,
+  "sampled_flow_ids_with_packets": 5000,
+  "sampled_flow_ids_missing_packets": 0,
+  "missing_flow_ids_preview": [],
+  "out_flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\subsets\\Wednesday-workingHours-external5000-stage1_flows.csv",
+  "final_flow_rows": 5000,
+  "final_binary_counts": {
+    "0": 2793,
+    "1": 2207
+  }
+}

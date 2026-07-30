@@ -1,0 +1,41 @@
+seed: 42
+data:
+  stage1_dir: C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\s1\stage1_artifacts
+  embedding_files:
+    train: stage1_train_embeddings.npz
+    val: stage1_val_embeddings.npz
+    test: stage1_test_embeddings.npz
+  metadata_csv: stage1_flow_metadata.csv
+  timestamp_col: flow_start_timestamp_us
+  source_col: source_id
+  destination_col: destination_id
+context:
+  method: time_only
+  window_size: 32
+  include_target: true
+  context_policy: split_isolated
+  endpoint_mode: same_endpoint
+  deduplicate: true
+model:
+  d_model: null
+  nhead: 8
+  num_layers: 2
+  dim_feedforward: 512
+  dropout: 0.3
+  num_classes: 2
+  pooling: last
+  use_positional_encoding: true
+  max_len: 512
+training:
+  epochs: 500
+  batch_size: 128
+  lr: 0.0003
+  weight_decay: 0.0001
+  num_workers: 0
+  patience: 20
+  metric_for_best: val_f1
+  use_weighted_sampler: true
+  class_weighted_loss: true
+  grad_clip_norm: 1.0
+  threshold: 0.5
+  device: auto

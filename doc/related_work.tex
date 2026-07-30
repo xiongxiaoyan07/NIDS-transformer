@@ -1,0 +1,338 @@
+\section{Related Work}
+\label{sec:related_work}
+
+Network intrusion detection has evolved from manually specified signatures to
+data-driven models that learn representations from packet traces, flow records,
+or sequences of network events. The literature can be organized along two
+closely related dimensions: the granularity of the traffic representation and
+the scope of the modeled context. In terms of granularity, existing systems use
+packet bytes, packet-header sequences, aggregated flow statistics, or learned
+flow embeddings. In terms of scope, most detectors classify each packet or flow
+independently, whereas a smaller body of work models temporal or relational
+dependencies among multiple flows. This section reviews these directions and
+positions the proposed hierarchical two-stage model with respect to them.
+
+\subsection{Signature-Based and Statistical Flow-Based Detection}
+\label{subsec:rw_signature_flow}
+
+Signature-based NIDSs identify traffic patterns that match expert-defined
+rules. Snort established a lightweight and extensible architecture for
+real-time packet inspection \cite{Roesch1999}, while Suricata provides a modern
+multi-threaded engine and programmable logging facilities
+\cite{SuricataGuide2026}. These systems remain important in operational
+networks because their alerts are interpretable and their behavior is
+controllable. However, their effectiveness depends on the availability and
+maintenance of signatures, and previously unseen or behaviorally modified
+attacks may not match known rules. More generally, Sommer and Paxson caution
+that learning-based NIDS research must account for the open-world character of
+network traffic and the semantic gap between laboratory benchmarks and
+operational deployment \cite{SommerPaxson2010}.
+
+Classical machine-learning NIDSs commonly transform packets into bidirectional
+flow records and represent each flow by statistics such as duration, packet and
+byte counts, rates, TCP flags, and inter-arrival-time summaries. Surveys by
+Ahmed et al. and Buczak and Guven describe the broad use of decision trees,
+support-vector machines, nearest-neighbor methods, clustering, and ensemble
+models for anomaly and intrusion detection
+\cite{Ahmed2016Survey,BuczakGuven2016}. Feature selection and hybrid
+classification can reduce dimensionality and improve conventional models
+\cite{Aljawarneh2018}. The principal advantage of flow aggregation is
+efficiency: one fixed-dimensional vector represents a variable-length network
+conversation. Its principal limitation is information loss. Two flows with
+similar totals may exhibit different packet orders, direction changes, burst
+structures, or timing gaps. Consequently, a detector trained only on aggregate
+statistics cannot directly learn the packet-level dynamics that generated
+those statistics.
+
+The present work retains flow statistics because they provide a compact summary
+of volume and protocol behavior, but it does not treat them as a sufficient
+representation. Instead, they are used as a complementary modality and fused
+with an embedding learned from the packet sequence. This design also motivates
+the flow-statistics MLP baseline used to test whether packet-level temporal
+modeling contributes information beyond aggregation alone.
+
+\subsection{Deep Learning for Packet and Flow Sequences}
+\label{subsec:rw_deep_sequences}
+
+Deep neural models reduce dependence on manually selected features by learning
+non-linear representations of network traffic. Recurrent NIDSs use hidden state
+to summarize ordered observations; for example, Yin et al. applied recurrent
+neural networks to intrusion detection and demonstrated their ability to learn
+sequential dependencies \cite{Yin2017RNNIDS}. Shone et al. combined a
+non-symmetric deep autoencoder with supervised classification to learn compact
+traffic representations \cite{Shone2018NNAE}. Kitsune instead used an ensemble
+of autoencoders for lightweight online anomaly detection, emphasizing the
+deployment value of compact and incrementally processed features
+\cite{Mirsky2018Kitsune}. Hybrid CNN--LSTM designs have also been used to combine
+local pattern extraction with recurrent temporal modeling
+\cite{Ullah2024IDSINT}.
+
+Sequence construction is as important as the choice of neural architecture.
+Many studies apply an LSTM or GRU to a vector of flow features, where the
+``sequence'' corresponds to feature dimensions rather than chronologically
+ordered packets or flows. Such a formulation can learn feature interactions but
+does not necessarily model network time. NetSentry addresses this issue more
+directly by treating intrusion detection as a time-sensitive task and using
+ordered network observations to detect early-stage large-scale attacks
+\cite{LiuPatras2022NetSentry}. Its results support the broader argument that
+temporally correlated behavior can be more informative than independently
+classified records. Nevertheless, recurrence imposes sequential computation,
+and a single final hidden state may become a bottleneck for long or irregularly
+sampled sequences.
+
+The Stage1 baselines in this thesis therefore include CNN, LSTM, GRU, BiLSTM,
+and time-augmented recurrent variants. These comparisons separate the value of
+the proposed traffic representation from the value of the Transformer
+architecture itself. In particular, they test whether explicit packet timing
+and attention-based aggregation improve minority-class detection relative to
+standard sequential encoders.
+
+\subsection{Transformer-Based Traffic Representation}
+\label{subsec:rw_transformers}
+
+Transformers replace recurrent state transitions with self-attention, enabling
+each token to interact directly with all other tokens in a sequence and
+supporting parallel training \cite{Vaswani2017}. This mechanism is attractive
+for network traffic because attack evidence may be separated by many packets
+or flows. RTIDS demonstrated that a Transformer-based detector can provide
+robust intrusion classification on flow-oriented benchmarks
+\cite{Wu2022RTIDS}. Long et al. subsequently studied an encoder-based
+Transformer for cloud network intrusion detection
+\cite{Long2024TransformerNIDS}, while IDS-INT combined Transformer-based
+transfer learning with imbalance handling and downstream neural components
+\cite{Ullah2024IDSINT}.
+
+Two studies are especially close to the representation problem considered in
+Stage1. Han et al. proposed GTID, which combines packet- and session-level
+features with a time-aware Transformer; importantly, its temporal encoding uses
+inter-packet intervals rather than relying only on ordinal position
+\cite{Han2023GTID}. FlowTransformer provides a modular framework for examining
+input encodings, Transformer blocks, classification heads, model size, and
+runtime on flow-based NIDS datasets \cite{Manocchio2024FlowTransformer}. More
+recently, the memory flow Transformer was proposed to retain longer-term flow
+information and model complex relations in large sequential inputs
+\cite{Jiang2025MFT}. Collectively, these works establish that attention-based
+models can capture dependencies that are difficult to represent with a single
+aggregate vector. They also show that input encoding, pooling, sequence
+construction, and efficiency can matter as much as the nominal model family.
+
+Despite this progress, three distinctions remain. First, positional order and
+elapsed network time are not equivalent: two adjacent packets may be separated
+by microseconds or seconds. Second, packet-sequence features and flow-level
+statistics describe complementary aspects of a connection and should be
+evaluated both separately and jointly. Third, a representation learned for one
+flow does not by itself explain whether that flow forms part of a distributed
+host-level pattern. The proposed Stage1 addresses the first two distinctions by
+combining positional and continuous-time encodings and by late-fusing the
+resulting packet-sequence embedding with flow statistics. Stage2 addresses the
+third by contextualizing the learned flow embeddings.
+
+\subsection{Self-Supervised and Encrypted-Traffic Representation Learning}
+\label{subsec:rw_ssl_encrypted}
+
+The increasing use of encryption has shifted traffic analysis away from direct
+payload inspection toward packet sizes, directions, timing, header metadata,
+and learned representations. Recent surveys document this transition and the
+growing role of deep pre-training for encrypted traffic classification
+\cite{Sharma2025EncryptedSurvey,Dong2025EncryptedPretrain}. ET-BERT adapts
+bidirectional Transformer pre-training to contextualized datagram
+representations and demonstrates transfer to encrypted-traffic classification
+tasks \cite{Lin2022ETBERT}. Masked-autoencoder approaches similarly learn from
+unlabeled traffic by reconstructing hidden parts of an input representation
+\cite{Zhao2024MAETraffic,2024MAETraffic}. Contrastive learning provides another
+route to label-efficient NIDS by bringing related traffic views together while
+separating incompatible examples \cite{Li2024Contrastive}.
+
+Other recent systems broaden the representation space. CoTNeT applies a
+contextual Transformer mechanism to encrypted-traffic features
+\cite{Huang2024CoTNet}, and DoLLM represents flow records in a form suitable for
+large-language-model-based DDoS detection \cite{Li2024DoLLM}. These approaches
+show that useful traffic representations can be learned without plaintext
+payloads and with reduced dependence on manually engineered signatures.
+However, encrypted-traffic classification and intrusion detection are not
+identical tasks: application identity may be stable even when attack behavior
+is sparse, evolving, or distributed across connections. The present thesis is
+therefore payload-independent but explicitly supervised for flow-level attack
+detection. Self-supervised pre-training is treated as a promising extension
+rather than a prerequisite of the proposed two-stage architecture.
+
+\subsection{Temporal, Relational, and Cross-Flow Context}
+\label{subsec:rw_cross_flow}
+
+Most flow-based detectors assume that samples are conditionally independent.
+This simplification is convenient for batching and online inference, but it is
+often inconsistent with attack behavior. Scanning, password guessing, command
+and control, DDoS, and lateral movement can produce multiple individually
+ambiguous flows whose shared source, destination, endpoint, or temporal pattern
+is discriminative. Temporal models such as NetSentry demonstrate the value of
+ordered observations \cite{LiuPatras2022NetSentry}, while graph-based NIDSs make
+host and flow relations explicit. Deng et al. model flow topology with graph
+convolution for label-limited IoT intrusion detection
+\cite{Deng2023FlowTopology}; Xu et al. combine graph neural networks with
+self-supervised learning for network-flow intrusion detection
+\cite{Xu2024SSLGNN}. A recent survey by Zhong et al. organizes the rapidly
+growing use of graph neural networks in IDSs and highlights their ability to
+encode structural dependencies \cite{Zhong2024GNNSurvey}.
+
+Graph methods provide expressive relational inductive bias, but constructing
+and updating a large communication graph can increase memory, latency, and
+deployment complexity. Window-based sequence models offer a complementary
+design point. A recent Transformer approach aggregates IoT flows into temporal
+windows and treats each flow as a token, allowing self-attention to capture
+inter-flow dependencies \cite{MartinReizabal2026FlowWindow}. The latest review
+of contextualized NetFlow NIDSs classifies context into temporal, relational,
+multimodal, and multi-resolution forms and emphasizes that evaluation must
+preserve causality and prevent cross-split context leakage
+\cite{ElMahdaouy2026ContextNetFlow}.
+
+The Stage2 model in this thesis follows the window-based direction but differs
+in two respects. First, its tokens are not raw flow records; they are fused
+Stage1 embeddings that already encode packet-level temporal dynamics and flow
+statistics. Second, context membership is explicitly controlled through
+time-only, source-host, destination-host, and endpoint strategies. This enables
+a direct ablation of which relational assumption contributes useful evidence.
+The comparison with a no-context classifier tests whether gains originate from
+neighboring flows rather than from additional classifier capacity, while the
+LSTM, GRU, and CNN--LSTM Stage2 baselines test whether self-attention is needed
+to aggregate that context.
+
+Table~\ref{tab:rw_model_comparison} summarizes the modeling scope of several
+representative Transformer-based approaches. The comparison is qualitative
+rather than performance-based because the studies use different datasets,
+labels, preprocessing pipelines, and evaluation protocols. Here,
+\emph{explicit elapsed time} means that timestamps or inter-arrival intervals
+are encoded directly; positional order or membership in a temporal window alone
+does not satisfy this criterion.
+
+\begin{table}[t]
+\centering
+\caption{Qualitative comparison of representative Transformer-based traffic
+models. Entries describe the principal configuration reported in each cited
+study; extensible frameworks may support additional variants.}
+\label{tab:rw_model_comparison}
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.22}
+\begin{tabular}{@{}p{1.85cm}p{2.65cm}p{1.55cm}p{2.15cm}p{2.45cm}p{1.85cm}p{1.85cm}@{}}
+\toprule
+\textbf{Method} &
+\textbf{Primary input} &
+\textbf{Intra-flow packet order} &
+\textbf{Explicit elapsed time} &
+\textbf{Inter-flow context} &
+\textbf{Payload dependency} &
+\textbf{Primary task} \\
+\midrule
+FlowTransformer \cite{Manocchio2024FlowTransformer} &
+Flow records and statistics &
+No &
+Not explicitly encoded &
+Yes; ordered flow sequence &
+No &
+Flow-level NIDS \\
+
+GTID \cite{Han2023GTID} &
+Packet headers and payload n-grams within a session &
+Yes &
+Yes; inter-packet intervals &
+No &
+Yes; payload n-grams &
+NIDS \\
+
+ET-BERT \cite{Lin2022ETBERT} &
+Raw datagram bytes grouped into BURSTs &
+Yes; byte and BURST order &
+No; order only &
+No cross-flow context &
+Yes; encrypted bytes &
+Encrypted-traffic classification \\
+
+Flow-to-window Transformer \cite{MartinReizabal2026FlowWindow} &
+Flow records in fixed-duration windows &
+No &
+Window-based order, not packet intervals &
+Yes; temporal window &
+No &
+IoT NIDS and traffic classification \\
+
+\textbf{Proposed} &
+Packet-header sequence and flow statistics &
+\textbf{Yes} &
+\textbf{Yes; packet timestamps or intervals} &
+\textbf{Yes; time, source, destination, or endpoint} &
+\textbf{No direct payload} &
+\textbf{Flow-level NIDS} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The table exposes the research gap without implying that the compared systems
+are directly rankable. FlowTransformer and the flow-to-window model capture
+relationships across flow records, but do not reconstruct the ordered packet
+dynamics inside each flow. GTID explicitly models packet order and inter-packet
+time, but operates on one session at a time and uses payload-derived n-grams.
+ET-BERT learns strong byte- and BURST-level representations from encrypted raw
+traffic, but its principal objective is encrypted-traffic classification rather
+than cross-flow intrusion detection. Among the representative systems in the
+table, the proposed framework is the only one that jointly combines
+payload-independent intra-flow packet modeling, explicit elapsed-time encoding,
+flow-statistical fusion, and configurable inter-flow context. This comparison
+therefore motivates the hierarchical separation between Stage1 and Stage2.
+
+\subsection{Datasets, Class Imbalance, and Evaluation Reliability}
+\label{subsec:rw_evaluation}
+
+Reported NIDS performance depends strongly on dataset construction and the
+evaluation protocol. Ring et al. distinguish packet- and flow-based datasets
+and identify recording environment, labeling, traffic diversity, and attack
+coverage as central dataset properties \cite{Ring2019Datasets}. More recent
+reviews show that the number of public NIDS datasets has grown substantially,
+but many datasets still contain limited realism, duplicated records, labeling
+errors, outdated attacks, or tool-dependent feature artifacts
+\cite{Goldschmidt2025Datasets,Pinto2025DatasetReview}. These problems can make
+random record-level splits overly optimistic when highly related flows, hosts,
+or capture periods occur in both training and test sets.
+
+Evaluation pitfalls are not limited to the data source. Arp et al. show that
+machine-learning security studies are vulnerable to leakage, inappropriate
+baselines, unrealistic assumptions, and metrics that obscure the actual
+security objective \cite{Arp2022DosDonts}. Class imbalance is particularly
+important in NIDS because high accuracy may coexist with poor attack recall.
+Focal loss is one possible training mechanism for emphasizing difficult and
+minority examples \cite{Lin2017FocalLoss}, but imbalance must also be reflected
+in reporting. Precision--recall analysis is generally more informative than
+ROC analysis when the positive class is rare
+\cite{SaitoRehmsmeier2015}. Accordingly, this thesis treats macro-F1 as the
+primary summary metric and reports macro-precision, macro-recall, attack-class
+precision/recall/F1, PR-AUC, ROC-AUC, the confusion matrix, and the false
+positive rate (FPR). Parameter count, training time, and inference time are also
+reported to expose the operational cost of contextual modeling.
+
+To reduce leakage risk, preprocessing parameters and decision thresholds should
+be selected without test-set access, and context windows should obey the chosen
+split policy. In particular, an online setting may use only information
+available before the target flow, whereas split-isolated evaluation must not
+allow validation or test flows to retrieve training-incompatible neighbors.
+These controls are essential for determining whether Stage2 learns transferable
+behavior or merely memorizes hosts, capture periods, or near-duplicate flows.
+
+\subsection{Summary and Research Gap}
+\label{subsec:rw_gap}
+
+Prior research has established the usefulness of aggregate flow statistics,
+deep sequential encoders, time-aware attention, self-supervised traffic
+representations, and graph or window-based context. Nevertheless, these
+directions are usually studied separately. Flow-statistical models are
+efficient but discard packet dynamics; packet-sequence models usually classify
+one flow at a time; and cross-flow models commonly operate on raw flow vectors
+without first learning a timing-aware representation inside each flow.
+
+This thesis addresses that gap with a hierarchical division of labor. Stage1
+models packet order and elapsed time within each flow and late-fuses the learned
+sequence representation with flow statistics. Stage2 then models dependencies
+among the resulting flow embeddings under explicit temporal and endpoint-based
+context policies. The design therefore connects two levels of network behavior:
+\emph{intra-flow} packet dynamics and \emph{inter-flow} attack context. The
+ablation studies are organized around the same distinction, allowing the work
+to test separately whether time-aware packet modeling improves the flow
+representation and whether cross-flow context improves the final detector.

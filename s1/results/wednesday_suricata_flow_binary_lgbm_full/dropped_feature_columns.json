@@ -1,0 +1,19 @@
+{
+  "identifier_time_endpoint_label_or_disabled": [
+    "flow_id",
+    "flow_start_timestamp_us",
+    "flow_end_timestamp_us",
+    "source_ip",
+    "destination_ip",
+    "label"
+  ],
+  "non_numeric": [],
+  "all_nan_on_train": [],
+  "constant_on_train": [
+    "fwd_urg_flags",
+    "bwd_urg_flags",
+    "urg_flag_count"
+  ],
+  "top_missing_columns_full": {},
+  "top_inf_columns_full": {}
+}

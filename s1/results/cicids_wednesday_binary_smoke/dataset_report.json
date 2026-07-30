@@ -1,0 +1,74 @@
+{
+  "csv_path": "C:\\Users\\XiaoyanXiong\\Downloads\\MachineLearningCSV\\MachineLearningCVE\\Wednesday-workingHours.pcap_ISCX.csv",
+  "file_size_mb": 214.73540782928467,
+  "num_rows": 20000,
+  "num_columns": 78,
+  "label_column": "Label",
+  "benign_label": "BENIGN",
+  "label_counts": {
+    "BENIGN": 12705,
+    "DoS Hulk": 6646,
+    "DoS GoldenEye": 302,
+    "DoS slowloris": 184,
+    "DoS Slowhttptest": 163
+  },
+  "binary_counts": {
+    "0": 12705,
+    "1": 7295
+  },
+  "attack_ratio": 0.36475,
+  "dropped_duplicate_header_columns": [
+    "Fwd Header Length.1"
+  ],
+  "dropped_empty_label_rows": 0,
+  "max_rows_read": null,
+  "sampled_rows_after_load": 20000,
+  "num_final_features": 67,
+  "split_sizes": {
+    "train": 13999,
+    "val": 2001,
+    "test": 4000
+  },
+  "split_binary_counts": {
+    "train": {
+      "0": 8893,
+      "1": 5106
+    },
+    "val": {
+      "0": 1271,
+      "1": 730
+    },
+    "test": {
+      "0": 2541,
+      "1": 1459
+    }
+  },
+  "dropped_feature_columns": {
+    "identifier_or_label_or_port": [
+      "Label"
+    ],
+    "requested_drop_not_found": [],
+    "non_numeric": [],
+    "all_nan_on_train": [],
+    "constant_on_train": [
+      "Bwd PSH Flags",
+      "Fwd URG Flags",
+      "Bwd URG Flags",
+      "CWE Flag Count",
+      "Fwd Avg Bytes/Bulk",
+      "Fwd Avg Packets/Bulk",
+      "Fwd Avg Bulk Rate",
+      "Bwd Avg Bytes/Bulk",
+      "Bwd Avg Packets/Bulk",
+      "Bwd Avg Bulk Rate"
+    ],
+    "top_missing_columns_full": {
+      "Flow Bytes/s": 35,
+      "Flow Packets/s": 35
+    },
+    "top_inf_like_columns_full": {
+      "Flow Packets/s": 35,
+      "Flow Bytes/s": 11
+    }
+  }
+}

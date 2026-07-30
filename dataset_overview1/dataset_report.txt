@@ -1,0 +1,27 @@
+============================================================
+Dataset Overview
+============================================================
+
+Number of Flows: 177278
+Number of Features: 77
+Unique Source IP: 14832
+Unique Destination IP: 17211
+Unique Source Port: 35430
+Unique Destination Port: 29914
+Protocols: 6
+
+Label Distribution
+        Count  Percentage
+label                    
+0      170722   96.301854
+1        6556    3.698146
+
+Protocol Distribution
+           Count  Percentage
+protocol                    
+6         128186   72.307901
+17         45763   25.814258
+1           2905    1.638669
+50           418    0.235788
+4              4    0.002256
+58             2    0.001128

@@ -1,0 +1,1 @@
+record_type,packet_id,timestamp_us,ts_sec,ts_usec,flow_id,direction,ip_version,src_ip,dst_ip,src_port,dst_port,protocol,pkt_len,ip_len,payload_len,ttl_or_hop_limit,tcp_seq,tcp_ack,tcp_flags,tcp_window,tcp_header_len,udp_len,icmp_type,icmp_code,l7_proto,flow_iat_us,direction_iat_us,packet_label

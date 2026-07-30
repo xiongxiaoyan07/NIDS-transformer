@@ -1,0 +1,223 @@
+{
+  "dataset_report": {
+    "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+    "file_size_mb": 236.1275053024292,
+    "raw_num_rows": 475809,
+    "raw_num_columns": 77,
+    "num_rows_after_label_filter": 475809,
+    "num_columns": 77,
+    "label_column": "label",
+    "label_counts_raw": {
+      "0": 265626,
+      "1": 210183
+    },
+    "binary_counts": {
+      "0": 265626,
+      "1": 210183
+    },
+    "attack_ratio": 0.4417381764531566,
+    "flow_id_column": "flow_id",
+    "duplicate_flow_id_rows": 242,
+    "dropped_missing_label_rows": 0,
+    "dropped_duplicate_flow_ids": false,
+    "args": {
+      "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+      "out_dir": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\s1\\results\\wednesday_suricata_flow_binary_lgbm_full",
+      "label_col": "label",
+      "flow_id_col": "flow_id",
+      "time_col": "flow_start_timestamp_us",
+      "models": [
+        "lgbm"
+      ],
+      "seed": 130,
+      "split": "random",
+      "train_size": 0.7,
+      "val_size": 0.1,
+      "test_size": 0.2,
+      "stratify": true,
+      "drop_duplicate_flow_ids": false,
+      "include_ports": true,
+      "include_protocol": true,
+      "drop_columns": "",
+      "min_numeric_ratio": 0.9,
+      "impute_strategy": "median",
+      "scale": true,
+      "robust_q_low": 5.0,
+      "robust_q_high": 95.0,
+      "clip_value": 50.0,
+      "threshold_metric": "f1_label1",
+      "threshold_steps": 999,
+      "class_weight": true,
+      "n_jobs": -1,
+      "n_estimators": 500,
+      "max_depth": null,
+      "min_samples_leaf": 1,
+      "logreg_max_iter": 2000,
+      "xgb_n_estimators": 600,
+      "xgb_max_depth": 6,
+      "xgb_learning_rate": 0.05,
+      "xgb_subsample": 0.9,
+      "xgb_colsample_bytree": 0.9,
+      "xgb_tree_method": "hist",
+      "lgbm_n_estimators": 800,
+      "lgbm_max_depth": -1,
+      "lgbm_learning_rate": 0.03,
+      "lgbm_num_leaves": 63,
+      "lgbm_subsample": 0.9,
+      "lgbm_colsample_bytree": 0.9,
+      "mlp_hidden": [
+        256,
+        128
+      ],
+      "mlp_alpha": 0.0001,
+      "mlp_batch_size": 2048,
+      "mlp_lr": 0.001,
+      "mlp_max_iter": 100,
+      "verbose_model": false,
+      "save_predictions": true
+    },
+    "num_final_features": 68,
+    "split_sizes": {
+      "train": 333066,
+      "val": 47581,
+      "test": 95162
+    },
+    "split_binary_counts": {
+      "train": {
+        "0": 185938,
+        "1": 147128
+      },
+      "val": {
+        "0": 26563,
+        "1": 21018
+      },
+      "test": {
+        "0": 53125,
+        "1": 42037
+      }
+    },
+    "dropped_feature_columns": {
+      "identifier_time_endpoint_label_or_disabled": [
+        "flow_id",
+        "flow_start_timestamp_us",
+        "flow_end_timestamp_us",
+        "source_ip",
+        "destination_ip",
+        "label"
+      ],
+      "non_numeric": [],
+      "all_nan_on_train": [],
+      "constant_on_train": [
+        "fwd_urg_flags",
+        "bwd_urg_flags",
+        "urg_flag_count"
+      ],
+      "top_missing_columns_full": {},
+      "top_inf_columns_full": {}
+    }
+  },
+  "results": [
+    {
+      "model": "lgbm",
+      "fit_seconds": 33.10075640678406,
+      "selected_threshold_from_val": 0.51,
+      "val_best_metrics": {
+        "accuracy": 0.9982556062293773,
+        "macro_precision": 0.9983190025209447,
+        "macro_recall": 0.9981446849434484,
+        "macro_f1": 0.9982312808202936,
+        "weighted_precision": 0.9982563965660486,
+        "weighted_recall": 0.9982556062293773,
+        "weighted_f1": 0.9982554536506466,
+        "precision_label1": 0.9988562169375208,
+        "recall_label1": 0.9971928822913693,
+        "f1_label1": 0.9980238565748435,
+        "auc": 0.9999478381858347,
+        "pr_auc": 0.999830656621677,
+        "per_class_f1": {
+          "0": 0.9984387050657437,
+          "1": 0.9980238565748435
+        },
+        "confusion_matrix": [
+          [
+            26539,
+            24
+          ],
+          [
+            59,
+            20959
+          ]
+        ],
+        "num_classes": 2,
+        "num_samples": 47581,
+        "loss": 0.005565712477835408,
+        "threshold": 0.51
+      },
+      "test_metrics": {
+        "accuracy": 0.9981925558521259,
+        "macro_precision": 0.9982399165608468,
+        "macro_recall": 0.9980956867969254,
+        "macro_f1": 0.9981674152882201,
+        "weighted_precision": 0.9981930461986281,
+        "weighted_recall": 0.9981925558521259,
+        "weighted_f1": 0.9981924250291664,
+        "precision_label1": 0.9986421782319731,
+        "recall_label1": 0.9972643147703214,
+        "f1_label1": 0.9979527709007808,
+        "auc": 0.9999785600640332,
+        "pr_auc": 0.9999746620057931,
+        "per_class_f1": {
+          "0": 0.9983820596756594,
+          "1": 0.9979527709007808
+        },
+        "confusion_matrix": [
+          [
+            53068,
+            57
+          ],
+          [
+            115,
+            41922
+          ]
+        ],
+        "num_classes": 2,
+        "num_samples": 95162,
+        "loss": 0.005227250111239246,
+        "threshold": 0.51
+      },
+      "test_oracle_best_threshold": 0.325,
+      "test_oracle_best_metrics_diagnostic_only": {
+        "accuracy": 0.9983186566066287,
+        "macro_precision": 0.9983277238499504,
+        "macro_recall": 0.9982632433892271,
+        "macro_f1": 0.9982954059820908,
+        "weighted_precision": 0.9983186989312832,
+        "weighted_recall": 0.9983186566066287,
+        "weighted_f1": 0.9983186022143092,
+        "precision_label1": 0.9984051795958201,
+        "recall_label1": 0.9977876632490426,
+        "f1_label1": 0.9980963259090044,
+        "auc": 0.9999785600640332,
+        "pr_auc": 0.9999746620057931,
+        "per_class_f1": {
+          "0": 0.9984944860551771,
+          "1": 0.9980963259090044
+        },
+        "confusion_matrix": [
+          [
+            53058,
+            67
+          ],
+          [
+            93,
+            41944
+          ]
+        ],
+        "num_classes": 2,
+        "num_samples": 95162,
+        "loss": 0.005227250111239246,
+        "threshold": 0.325
+      }
+    }
+  ]
+}

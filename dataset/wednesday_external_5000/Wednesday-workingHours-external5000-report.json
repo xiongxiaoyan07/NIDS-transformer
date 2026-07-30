@@ -1,0 +1,74 @@
+{
+  "args": {
+    "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+    "packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_packets.csv",
+    "out_dir": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000",
+    "prefix": "Wednesday-workingHours-external5000",
+    "flow_id_col": "flow_id",
+    "label_col": "label",
+    "time_col": "flow_start_timestamp_us",
+    "packet_time_col": "timestamp_us",
+    "n_flows": 5000,
+    "selection": "balanced",
+    "target_attack_ratio": null,
+    "min_malicious": 1,
+    "min_benign": 1,
+    "deduplicate_flow_ids": true,
+    "chunksize": 500000,
+    "progress_every_chunks": 5,
+    "skip_packet_filter": false
+  },
+  "flow_report": {
+    "flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_flows.csv",
+    "raw_rows": 475809,
+    "raw_columns": 77,
+    "rows_after_stage1_clean": 475567,
+    "dropped_invalid_stage1_clean": 0,
+    "duplicate_flow_id_rows_before_dedup": 242,
+    "deduplicate_flow_ids": true,
+    "rows_after_dedup": 475567,
+    "label_counts_after_clean": {
+      "0": 265623,
+      "1": 209944
+    },
+    "attack_ratio_after_clean": 0.4414604041070974
+  },
+  "selection_report": {
+    "selection": "balanced",
+    "requested_n_flows": 5000,
+    "selected_n_flows": 5000,
+    "start_index_after_time_sort": 87386,
+    "end_index_exclusive_after_time_sort": 92386,
+    "selected_label_counts": {
+      "0": 2793,
+      "1": 2207
+    },
+    "selected_attack_ratio": 0.4414,
+    "selected_time_start_us": 1499261922176971,
+    "selected_time_end_us": 1499262204673175,
+    "selected_time_duration_us": 282496204,
+    "min_malicious": 1,
+    "min_benign": 1
+  },
+  "outputs": {
+    "external_flow_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-stage1_flows.csv",
+    "external_packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-stage1_packets.csv",
+    "flow_ids": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-flow_ids.txt",
+    "report": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-report.json"
+  },
+  "packet_report": {
+    "packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\Wednesday-workingHours-stage1_packets.csv",
+    "out_packet_csv": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-stage1_packets.csv",
+    "chunks_seen": 29,
+    "raw_packet_rows_seen": 14112668,
+    "selected_packet_rows": 76213,
+    "matched_flow_count": 5000,
+    "selected_flow_count": 5000,
+    "missing_packet_flow_count": 0,
+    "missing_packet_flow_ids_head": []
+  },
+  "stage1_usage": {
+    "external_flow_csv_arg": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-stage1_flows.csv",
+    "external_packet_csv_arg": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\dataset\\wednesday_external_5000\\Wednesday-workingHours-external5000-stage1_packets.csv"
+  }
+}
