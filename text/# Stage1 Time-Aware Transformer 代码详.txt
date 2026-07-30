@@ -1,0 +1,528 @@
+# Stage1 Time-Aware Transformer 代码详细解析
+
+我已经仔细阅读了所有11个文件。这是一套**工程化程度很高、架构设计清晰**的 Stage1 训练代码。下面我按照数据流和架构层次进行详细解析。
+
+---
+
+## 一、整体架构概览
+
+```
+run_stage1.py (入口)
+    │
+    ├── config.py ───────────── 加载 YAML 配置
+    ├── pipeline.py ─────────── 编排整个数据流程
+    │   ├── data_io.py ──────── CSV 读取、清洗、截断
+    │   ├── splits.py ──────── 训练/验证/测试 划分
+    │   ├── preprocessing.py ── 特征工程
+    │   └── dataset.py ──────── PyTorch Dataset
+    │
+    ├── model.py ────────────── Stage1TimeAwareTransformer
+    │   ├── RecordLevelProjection
+    │   ├── TimeAwareEncoding
+    │   ├── TransformerEncoder
+    │   ├── AttentionPooling
+    │   ├── FlowFeatureEncoder (方案C)
+    │   └── FlowFusion (方案C)
+    │
+    ├── trainer.py ──────────── 训练循环 + 评估
+    │   ├── losses.py (FocalLoss + LabelSmoothing)
+    │   └── metrics.py (分类指标)
+    │
+    └── export_embeddings.py ── 导出 Stage2 用的 z_i 嵌入
+```
+
+---
+
+## 二、数据流详解
+
+### 2.1 入口：`run_stage1.py`
+
+```python
+# 核心流程
+loaders, preprocessor, metadata = build_dataloaders(...)  # Step 1
+model = Stage1TimeAwareTransformer(input_dim, cfg)        # Step 2
+run_summary = train_model(model, loaders, ...)            # Step 3
+export_embeddings(model, loader, ...)                     # Step 4
+```
+
+**设计亮点**：
+
+* 支持外部测试集：`--external_packet_csv` / `--external_flow_csv`
+* 自动检测三种融合方案（A/B/C）并动态设置 `input_dim`
+* 输出 Stage2 需要的 flow embedding `z_i`
+
+---
+
+### 2.2 数据加载与预处理：`data_io.py`
+
+#### a) CSV 清洗 `clean_dataframe()`
+
+```python
+# 关键操作：
+- 去除 Suricata record_type 列
+- 替换 inf/-inf → NaN
+- 过滤 flow_id == 0 的异常数据
+```
+
+#### b) 包截断策略 `read_stage1_csvs()`
+
+```python
+策略选择（从 YAML 配置）：
+┌──────────┬─────────────────────────────────┐
+│  head    │  保留前 max_seq_len 个包        │
+│  head_tail│ 保留前半 + 后半                │
+│  random  │  随机采样（种子绑定 flow_id）   │
+└──────────┴─────────────────────────────────┘
+```
+
+#### c) 预计算张量 `generate_and_save_stage1_tensors()`
+
+这是**关键的性能优化**：
+
+```python
+# 1. 一次性排序所有 packets
+packets_sub = packets_sub.sort_values([flow_id_col, packet_time_col])
+
+# 2. 一次性转换所有 packet features（避免逐流重复计算）
+packet_x_all = preprocessor.transform_packets_only(packets_sub)
+
+# 3. 用 groupby.indices 批量构建每个 flow 的 tensor
+group_indices = packets_sub.groupby(flow_id_col, sort=False).indices
+
+# 4. 将结果保存为 .npz 文件，下次直接加载
+```
+
+**三种融合方案的张量组装**：
+
+```python
+# 方案A：flow 特征拼接到每个 packet
+x_tensor[row_idx, :real_len, :packet_feature_dim] = packet_x_all[idxs]
+x_tensor[row_idx, :real_len, packet_feature_dim:] = flow_x_all[row_idx]
+
+# 方案B：仅 packet 特征
+x_tensor[row_idx, :real_len] = packet_x_all[idxs]
+
+# 方案C：packet 在 x 中，flow 在 flow_feats 中（分开存储）
+x_tensor[row_idx, :real_len] = packet_x_all[idxs]
+flow_feats_tensor[row_idx] = flow_x_all[row_idx]
+```
+
+**保存的 Stage2 元数据**：
+
+```python
+save_dict = {
+    "x": x_tensor,           # [N, max_seq_len, feature_dim]
+    "time": time_tensor,     # [N, max_seq_len] - log1p(iat)
+    "mask": mask_tensor,     # [N, max_seq_len]
+    "labels": labels,        # [N]
+    "flow_ids": flow_ids,    # [N]
+    # Stage2 需要的元数据（不作为 Stage1 特征）
+    "flow_start_timestamp_us": ...,
+    "source_id": ...,
+    "destination_id": ...,
+}
+```
+
+---
+
+### 2.3 训练/验证/测试 划分：`splits.py`
+
+支持两种划分方式：
+
+#### a) 分层随机划分 `stratified_train_val_test_split()`
+
+```python
+# 经典方法：sklearn train_test_split + stratify
+# 如果 label=1 极稀少，强制确保 test 至少有一个正样本
+```
+
+#### b) 时序划分 `chronological_train_val_test_split()` ⭐
+
+```python
+# 核心思想：
+# train = 最早 70% 时间窗口
+# val   = 中间 10% 时间窗口
+# test  = 最新 20% 时间窗口
+
+# 边界优化：在理论边界附近搜索，平衡 label=1 的分布
+b1, b2 = _choose_chronological_boundaries_with_label_balance_fast_stride(
+    labels, nominal_b1, nominal_b2, ...
+)
+```
+
+**时序划分的边界搜索算法**（分块加速）：
+
+```python
+def _choose_chronological_boundaries_with_label_balance_fast_stride():
+    """
+    目标：保持时序连续性的前提下，平衡各 split 的正样本比例
+    
+    评分函数：
+    score = 10.0 * label_balance_score    # 标签平衡性（主要权重）
+          + 1.0 * size_score              # 划分比例偏差
+          + 5.0 * missing_positive_penalty # 惩罚缺失正样本
+    
+    优化：分块向量化搜索 + stride 采样
+    """
+```
+
+**设计权衡**：
+
+| 特性    | 分层随机划分   | 时序划分        |
+| ----- | -------- | ----------- |
+| 时序保真度 | ❌ 完全打乱   | ✅ 严格连续      |
+| 标签平衡  | ✅ 精确分层   | ⚠️ 近似平衡     |
+| 适用场景  | 独立采样的数据集 | 连续抓包 / 真实流量 |
+
+---
+
+### 2.4 特征工程：`preprocessing.py`
+
+#### 特征分类
+
+```yaml
+# 从 YAML 配置中读取三类特征：
+packet:
+  categorical: [ip_version, protocol, l7_proto, ...]  # → One-Hot
+  numerical:   [pkt_len, ip_len, ttl, ...]            # → Log1p + Clip + Scale
+  binary:      [direction, tcp_fin, tcp_syn, ...]     # → 0/1 保持原样
+```
+
+#### 数值特征处理管线
+
+```
+Raw Value → Log1p（选定列）→ 填充 NaN → Clipping（分位数）→ StandardScaler
+```
+
+**关键设计**：
+
+* **拟合只在训练集上**：`fit()` 仅学习 `train_packets`, `train_flows`
+* **裁剪边界学习**：`_fit_clip_bounds()` 从训练集学习分位数
+* **导出的 `log_flow_iat_us`**：用于时间感知编码的 `time_log` 输入
+
+#### 三种特征产出
+
+```python
+# transform_packets_only():  仅 packet 特征（方案B/C 用）
+# transform_packets():       packet 特征（完整版）
+# transform_flows():         flow 特征（方案C 用）
+```
+
+---
+
+### 2.5 数据集：`dataset.py`
+
+```python
+class PrecomputedFlowDataset(Dataset):
+    """
+    加载预计算的 .npz 文件
+    
+    返回字典：
+    {
+        'x':        [max_seq_len, feature_dim],
+        'time':     [max_seq_len],           # log1p(iat)
+        'mask':     [max_seq_len],           # True=有效包
+        'label':    scalar,
+        'flow_id':  scalar,
+        'flow_feats': [flow_feature_dim] or None,  # 方案C
+        # Stage2 元数据：
+        'flow_start_timestamp_us': ...,
+        'source_id': ...,
+        'destination_id': ...,
+    }
+    """
+```
+
+**设计亮点**：
+
+* 预计算 → 快速加载，避免每次 epoch 重新处理
+* 灵活支持三种方案：自动检测 `has_flow_feats`
+* 保留 Stage2 需要的原始标识符
+
+---
+
+## 三、模型架构详解：`model.py`
+
+### 3.1 组件层次
+
+```
+Stage1TimeAwareTransformer
+│
+├── RecordLevelProjection      # e_i,t = W·x_i,t + b
+│   └── [Linear] or [MLP]      # 可配置 MLP
+│
+├── TimeAwareEncoding          # TE(pos + p)
+│   ├── 计算累积时间 p = log(1 + ΣΔt + α)
+│   ├── sin/cos 编码
+│   └── Dropout
+│
+├── TransformerEncoder         # 包间交互
+│   ├── Multi-Head Self-Attention
+│   ├── Pre-LayerNorm (norm_first=True)
+│   └── GELU 激活
+│
+├── AttentionPooling           # 学习式注意力池化
+│   ├── Linear → Tanh → Linear → Softmax
+│   └── 加权求和 → z_i
+│
+├── FlowFeatureEncoder (方案C) # 编码 flow 统计特征
+│   └── Linear → LayerNorm → GELU → Dropout → Linear
+│
+├── FlowFusion (方案C)         # 融合 packet 和 flow 表示
+│   ├── concat:  拼接 → 投影
+│   ├── gated:   门控融合 (默认)
+│   └── add:     加法融合
+│
+└── Classifier                 # 分类头
+    └── LayerNorm → [MLP] → Linear(2)
+```
+
+### 3.2 Time-Aware Encoding ⭐ 核心创新
+
+```python
+class TimeAwareEncoding:
+    """
+    论文公式 6-7 的实现：
+    
+    TE(pos, 2j)   = sin((pos + p) / 10000^(2j/d_model))
+    TE(pos, 2j+1) = cos((pos + p) / 10000^(2j/d_model))
+    
+    其中 p = log(1 + Σ(time_intervals) + α)
+    """
+```
+
+**四种编码模式**：
+
+| use_pos | use_time | 行为                             |
+| ------- | -------- | ------------------------------ |
+| True    | True     | **Full Time-Aware**: TE(pos+p) |
+| True    | False    | **Position Only**: 传统 PE       |
+| False   | True     | **Time Only**: TE(p)，无位置索引     |
+| False   | False    | 无编码                            |
+
+**时间特征计算**：
+
+```python
+def _compute_time_feature(self, time_log):
+    # 反推原始间隔：exp(log1p(x)) - 1
+    time_intervals = torch.expm1(time_log)
+    # 累积求和 + 平滑
+    cumulative_time = torch.cumsum(time_intervals, dim=1)
+    p = torch.log(1.0 + cumulative_time + self.alpha)
+    return p
+```
+
+**设计考量**：
+
+* `alpha = 1e-7`：平滑因子，防止 log(0)
+* `expm1` / `log1p`：数值稳定的反变换
+* 预计算 `div_term` 和 `position`，推理时只计算 `p`
+
+### 3.3 三种融合方案对比
+
+```python
+# 方案A：Flow 特征拼接到每个 Packet
+# - x_i,t = [packet_features; flow_features_tiled]
+# - flow 信息通过 Transformer 的 self-attention 参与包间交互
+
+# 方案B：仅 Packet 特征
+# - x_i,t = [packet_features]
+# - 最简单的方案，作为 baseline
+
+# 方案C：分层特征注入（gated 融合） ⭐
+# - Packet 通过 Transformer → z_packet
+# - Flow 通过 FlowFeatureEncoder → z_flow
+# - z_final = gate * z_packet + (1-gate) * z_flow
+```
+
+**方案C 的 Gated 融合**：
+
+```python
+class FlowFusion:
+    def forward(self, pooled, flow_encoded):
+        if self.fusion_method == "gated":
+            concat_feat = torch.cat([pooled, flow_encoded], dim=-1)
+            gate = self.gate(concat_feat)  # [B, d_model], ∈ [0,1]
+            fused = gate * pooled + (1 - gate) * flow_encoded
+            return self.post_gate(fused)
+```
+
+### 3.4 Attention Pooling（替换简单 Mean Pooling）
+
+```python
+class AttentionPooling:
+    def forward(self, h, mask):
+        attn_weights = self.attention(h).squeeze(-1)     # [B, L]
+        attn_weights = attn_weights.masked_fill(~mask, -1e9)
+        attn_weights = torch.softmax(attn_weights, dim=-1)
+        z = (h * attn_weights.unsqueeze(-1)).sum(dim=1)  # [B, D]
+        return z
+```
+
+**优于 Mean Pooling**：
+
+* 模型自动学习哪些包更重要
+* 对填充位置正确忽略（mask 处理）
+* 可解释性：可以可视化注意力权重
+
+---
+
+## 四、训练系统：`trainer.py`
+
+### 4.1 损失函数：`losses.py`
+
+```python
+class FocalLossWithLabelSmoothing:
+    """
+    结合三个技术：
+    1. Focal Loss：降低易分类样本的权重
+    2. Label Smoothing：防止过拟合
+    3. Class Alpha：类别平衡权重
+    """
+    def forward(self, inputs, targets):
+        # 1. Focal weight
+        probs_gt = softmax(inputs)[targets]
+        focal_weight = (1 - probs_gt) ** self.gamma
+        
+        # 2. Alpha weight
+        alpha_weight = self.alpha[targets]
+        
+        # 3. Cross-entropy with label smoothing
+        ce_loss = F.cross_entropy(inputs, targets, 
+                                  label_smoothing=self.label_smoothing)
+        
+        return (focal_weight * alpha_weight * ce_loss).mean()
+```
+
+### 4.2 学习率调度
+
+```python
+# Warmup + Cosine Annealing
+warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs)
+cosine_scheduler = CosineAnnealingLR(optimizer, T_max=cosine_epochs)
+scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+```
+
+### 4.3 阈值搜索
+
+```python
+def find_optimal_threshold(model, val_loader, device):
+    """
+    在验证集上网格搜索最优决策阈值
+    不依赖默认的 0.5 阈值
+    """
+    for threshold in np.arange(0.1, 0.95, 0.05):
+        y_pred = (y_scores >= threshold).astype(int)
+        # 计算 F1, Precision, Recall
+    best_threshold = max(results, key=lambda x: x['f1'])
+```
+
+### 4.4 不平衡处理策略
+
+```python
+# 1. 类别权重计算
+alpha = compute_class_alpha(train_labels)  # 少数类获得更大权重
+
+# 2. WeightedRandomSampler（过采样少数类）
+sampler = WeightedRandomSampler(weights=sample_weights, 
+                                num_samples=len(sample_weights),
+                                replacement=True)
+
+# 3. Focal Loss（gamma 自动调整）
+if imbalance_ratio > 10: gamma = 2.0
+elif imbalance_ratio > 5: gamma = 1.5
+else: gamma = 1.0
+```
+
+**注意**：`trainNoSampler` loader 用于导出 embedding 时保持原始分布。
+
+---
+
+## 五、导出 Stage2 嵌入：`export_embeddings.py`
+
+```python
+def export_embeddings(model, loader, device, output_npz_path):
+    """
+    输出 Stage2 需要的字段：
+    {
+        "flow_id": [...],
+        "label": [...],
+        "z": z_mat,                    # Stage1 池化后的 flow 表示
+        "split": [...],                # train/val/test
+        "flow_start_timestamp_us": [...],  # Stage2 时序窗口
+        "source_id": [...],            # Stage2 拓扑关系
+        "destination_id": [...],
+    }
+    """
+    # 关键：使用 return_embedding=True 获取 z
+    logits, z, h = model(x, t, mask, flow_feats=flow_feats, 
+                         return_embedding=True)
+```
+
+---
+
+## 六、工程实践亮点
+
+### 6.1 配置驱动
+
+```yaml
+# 所有超参数集中在 stage1_config.yaml
+features.packet.categorical: [...]   # 特征选择
+model.d_model: 128                   # 模型超参
+training.focal_gamma: 2.0            # 损失函数参数
+```
+
+### 6.2 缓存机制
+
+```python
+# 预计算 tensor 缓存
+if os.path.exists(npz_path):
+    return npz_path  # 直接加载，跳过重复处理
+```
+
+### 6.3 数值稳定性
+
+```python
+# 多处使用 log1p / expm1 避免精度损失
+time_log_all = np.log1p(time_raw_all)
+time_intervals = torch.expm1(time_log)
+
+# 概率裁剪防止 log(0)
+probs = torch.clamp(probs, min=eps, max=1.0 - eps)
+```
+
+### 6.4 可复现性
+
+```python
+set_seed(seed)  # random, numpy, torch, cuda 全部固定
+```
+
+### 6.5 日志和可视化
+
+```python
+# 训练曲线、混淆矩阵、各类别 F1
+plot_training_curves(history, out_dir, best_epoch)
+plot_confusion_matrix(cm, class_names, out_dir)
+plot_per_class_f1(per_class_f1, class_names, out_dir)
+```
+
+---
+
+## 七、总结
+
+这套 Stage1 代码实现了你在 Research Proposal 中设计的**时间感知 Transformer 架构**，具备：
+
+1. **完整的可配置性**：特征选择、截断策略、融合方案全部 YAML 驱动
+2. **三重不平衡处理**：WeightedRandomSampler + FocalLoss + ClassAlpha
+3. **时序划分能力**：Chronological split + 边界优化（关键创新点）
+4. **模块化设计**：清晰的组件分离，方便消融实验
+5. **Stage2 就绪**：直接输出 flow embedding 和元数据
+
+**与 Proposal 的对应关系**：
+
+* ✅ 包级序列建模 → TransformerEncoder
+* ✅ 时间感知编码 → TimeAwareEncoding (TE(pos+p))
+* ✅ 包间 + 流间分离 → Stage1 输出 z_i 供 Stage2
+* ✅ 多种 baseline 支持 → 方案A/B/C + encoding 消融
+
+如果需要进一步讨论 Stage2 的实现、HPO 优化、或论文写作，随时可以继续。

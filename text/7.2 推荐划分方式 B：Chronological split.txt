@@ -1,0 +1,29 @@
+7.2 推荐划分方式 B：Chronological split
+
+如果你的数据是一个连续 PCAP 或真实 internal traffic，建议按时间划分：
+
+train: 最早 70%
+val:   中间 10%
+test:  最后 20%
+
+这更接近真实部署：模型用过去数据训练，在未来流量上测试。
+
+def chronological_split(
+    flows_df,
+    time_col="start_ts",
+    train_size=0.7,
+    val_size=0.1,
+):
+    df = flows_df.sort_values(time_col).reset_index(drop=True)
+    n = len(df)
+
+    train_end = int(n * train_size)
+    val_end = int(n * (train_size + val_size))
+
+    df["split"] = "test"
+    df.loc[:train_end - 1, "split"] = "train"
+    df.loc[train_end:val_end - 1, "split"] = "val"
+
+    return df
+
+这种 split 对 Stage 2 尤其重要，因为 inter-flow context 本身依赖时间顺序。

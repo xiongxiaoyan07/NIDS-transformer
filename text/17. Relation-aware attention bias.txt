@@ -1,0 +1,29 @@
+17. Relation-aware attention bias
+
+如果你做 mixed context，可以给 attention 加关系 bias：
+
+same_source       + b_src
+same_destination  + b_dst
+same_endpoint     + b_ep
+time_distance     - lambda * age
+
+attention score：
+
+score = qk / sqrt(d) + relation_bias
+
+1、source/destination 双路 attention
+不要把 endpoint 混在一起。更合理是：
+summary_src = attention(current, source_history)
+summary_dst = attention(current, destination_history)
+fused = [current, summary_src, summary_dst, current-summary_src, current-summary_dst]
+你的结果里 source_host 和 destination_host 行为不同：source 更均衡，destination 更召回。双路比 endpoint 混合更可解释，也更可能提升。
+2、recency-biased attention
+历史越近越重要，可以给 attention logits 加 age bias：
+attn_score += -lambda * age
+或者把 age / delta_time 作为额外 feature。现在 sinusoidal position 只告诉模型顺序，不直接表达“越近越可信”。
+3、context dropout
+训练时随机丢一部分历史 token，防止模型过度依赖 context 长度或少数噪声历史：
+history_mask = history_mask & (torch.rand_like(history_mask.float()) > p)
+建议 p=0.1/0.2。
+4、top-k attention / sparse attention
+只取 attention 权重最高的前 k 个历史 summary，减少 endpoint/timeOnly 噪声。适合 window_size=128 时尝试。

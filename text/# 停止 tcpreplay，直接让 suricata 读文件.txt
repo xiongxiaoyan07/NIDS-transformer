@@ -1,0 +1,40 @@
+# 停止 tcpreplay，直接让 suricata 读文件
+sudo suricata -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/bacore001_eth2_20250422_115700.pcap
+sudo suricata -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/firewall_test_20250731_160700.pcap
+sudo suricata --runmode single -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/firewall_test_20250731_160700.pcap
+sudo suricata --runmode single -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/bacore001_eth2_20250422_115700.pcap
+sudo suricata --runmode single -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/ar002_et12_20260511_001.pcap
+
+--查看 ar002_et12_20260511_002
+
+
+
+
+ls -l -h /var/log/suricata
+--删除
+sudo rm -f /var/log/suricata/eve.json
+--查看
+ls -l -h /home/xxiong/pcaps
+--删除
+sudo rm -f /home/xxiong/pcaps/stage1_flows.csv
+sudo rm -f /home/xxiong/pcaps/stage1_packets.csv
+
+
+从 VM -> 本地：在本地运行 scp (拉取) 或在本地使用 WinSCP 工具
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/stage1_flows.csv  C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/stage1_packets.csv  C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset
+scp xxiong@136.144.177.139:/var/log/suricata/eve.json  C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset
+
+
+从本地 -> VM：在本地运行 scp
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\suricata-plugin\custom-out.c xxiong@136.144.177.139:/home/xxiong/my_plugin
+
+
+
+sudo rm -f /home/xxiong/pcaps/pbx20.all.20260302_104500.pcap
+
+
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\pcaps\dataset_20260511\ar002_et12_20260511_001.pcap xxiong@136.144.177.139:/home/xxiong/pcaps
+
+
+
