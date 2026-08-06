@@ -1,0 +1,242 @@
+{"kind":"deck","id":"pr/hjc32d","name":"Deck"}
+{"kind":"layout","layoutId":"d12946f2-3bf4-454c-9af8-9c22e5f4e070","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"b2fc64f7-edd8-444f-9e25-2a0b39d5416d","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/2kp02s","slide":1,"title":"MSc Thesis Defense","textShapes":4}
+{"kind":"textbox","id":"sh/ytg725wb","slide":1,"text":"MSc Thesis Defense","textPreview":"MSc Thesis Defense","textChars":18,"textLines":1,"bbox":[42,42,450,40]}
+{"kind":"textbox","id":"sh/lg7qxkfm","slide":1,"text":"A Hierarchical Time-Aware\nTransformer for Flow-Level\nNetwork Intrusion Detection","textPreview":"A Hierarchical Time-Aware | Transformer for Flow-Level | Network Intrusion Detection","textChars":80,"textLines":3,"bbox":[42,150,930,270]}
+{"kind":"textbox","id":"sh/kvyp4fe1","slide":1,"text":"Xiaoyan Xiong  |  Supervisor: Le Viet Duc","textPreview":"Xiaoyan Xiong  |  Supervisor: Le Viet Duc","textChars":41,"textLines":1,"bbox":[42,520,780,42]}
+{"kind":"textbox","id":"sh/bq58rqxk","slide":1,"text":"25-minute defense","textPreview":"25-minute defense","textChars":17,"textLines":1,"bbox":[42,582,300,32]}
+{"kind":"notes","id":"nt/2kp02s","slide":1,"text":"Good morning, and thank you for attending my thesis defense. My thesis investigates a hierarchical time-aware Transformer for flow-level network intrusion detection. The central idea is that network traffic has two levels of temporal structure: packets form a flow, and related flows form broader behaviour. I will first introduce the basic networking concepts, then explain the two-stage model, and finally present the evaluation results, limitations, and conclusions.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/6qvyaw","slide":2,"title":"A packet is one transmitted unit; a flow is a conversation","textShapes":17}
+{"kind":"textbox","id":"sh/q9kvm50z","slide":2,"text":"A packet is one transmitted unit; a flow is a conversation","textPreview":"A packet is one transmitted unit; a flow is a conversation","textChars":58,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/dcbuxkjq","slide":2,"text":"02","textPreview":"02","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/cb2dofi5","slide":2,"text":"PACKET","textPreview":"PACKET","textChars":6,"textLines":1,"bbox":[70,135,220,45]}
+{"kind":"textbox","id":"sh/zetczu1w","slide":2,"text":"A single unit sent across a network","textPreview":"A single unit sent across a network","textChars":35,"textLines":1,"bbox":[70,185,430,45]}
+{"kind":"shape","id":"sh/edkvqp0b","slide":2,"bbox":[70,265,95,72]}
+{"kind":"textbox","id":"sh/1gvu14jm","slide":2,"text":"timestamp","textPreview":"timestamp","textChars":9,"textLines":1,"bbox":[76,273,83,56]}
+{"kind":"shape","id":"sh/0f2dszih","slide":2,"bbox":[182,265,95,72]}
+{"kind":"textbox","id":"sh/n2dc3u1s","slide":2,"text":"source / destination","textPreview":"source / destination","textChars":20,"textLines":1,"bbox":[188,273,83,56]}
+{"kind":"shape","id":"sh/mh4vup07","slide":2,"bbox":[294,265,95,72]}
+{"kind":"textbox","id":"sh/ofa98fup","slide":2,"text":"protocol","textPreview":"protocol","textChars":8,"textLines":1,"bbox":[300,273,83,56]}
+{"kind":"shape","id":"sh/pgjah0va","slide":2,"bbox":[406,265,95,72]}
+{"kind":"textbox","id":"sh/2tsr65cj","slide":2,"text":"length & flags","textPreview":"length & flags","textChars":14,"textLines":1,"bbox":[412,273,83,56]}
+{"kind":"shape","id":"sh/3u1sfad4","slide":2,"bbox":[535,285,100,34]}
+{"kind":"textbox","id":"sh/cju9cful","slide":2,"text":"group by endpoints, protocol\nand direction over time","textPreview":"group by endpoints, protocol | and direction over time","textChars":52,"textLines":2,"bbox":[507,335,160,70]}
+{"kind":"textbox","id":"sh/dk3alkb6","slide":2,"text":"FLOW","textPreview":"FLOW","textChars":4,"textLines":1,"bbox":[730,135,220,45]}
+{"kind":"textbox","id":"sh/qhsra5cv","slide":2,"text":"A bidirectional sequence of related packets","textPreview":"A bidirectional sequence of related packets","textChars":43,"textLines":1,"bbox":[730,185,470,45]}
+{"kind":"shape","id":"sh/bi1sjatg","slide":2,"bbox":[745,285,62,44]}
+{"kind":"textbox","id":"sh/0nu9gzux","slide":2,"text":"p1","textPreview":"p1","textChars":2,"textLines":1,"bbox":[755,290,42,32]}
+{"kind":"shape","id":"sh/lo3ap4bi","slide":2,"bbox":[831,285,62,44]}
+{"kind":"textbox","id":"sh/94za9k3m","slide":2,"text":"p2","textPreview":"p2","textChars":2,"textLines":1,"bbox":[841,290,42,32]}
+{"kind":"shape","id":"sh/83q90fm1","slide":2,"bbox":[917,285,62,44]}
+{"kind":"textbox","id":"sh/72hs7ulg","slide":2,"text":"p3","textPreview":"p3","textChars":2,"textLines":1,"bbox":[927,290,42,32]}
+{"kind":"shape","id":"sh/m18ryp4v","slide":2,"bbox":[1003,285,62,44]}
+{"kind":"textbox","id":"sh/h8jad43i","slide":2,"text":"p4","textPreview":"p4","textChars":2,"textLines":1,"bbox":[1013,290,42,32]}
+{"kind":"shape","id":"sh/w7a94zmx","slide":2,"bbox":[1089,285,62,44]}
+{"kind":"textbox","id":"sh/v61sbuls","slide":2,"text":"p5","textPreview":"p5","textChars":2,"textLines":1,"bbox":[1099,290,42,32]}
+{"kind":"textbox","id":"sh/u5sr2p47","slide":2,"text":"Flow statistics summarize the conversation:\nduration, packet count, bytes, rates and timing.","textPreview":"Flow statistics summarize the conversation: | duration, packet count, bytes, rates and timing.","textChars":92,"textLines":2,"bbox":[730,380,470,100]}
+{"kind":"notes","id":"nt/6qvyaw","slide":2,"text":"Before discussing the model, I will define two basic concepts. A packet is one transmitted unit. It contains metadata such as a timestamp, source and destination, protocol, length, and control flags. A flow groups packets that belong to the same network conversation, normally using endpoint and protocol information. A flow is therefore a sequence, while flow statistics are summaries of that sequence. Traditional flow-based detectors usually keep only the summaries. My thesis asks what is lost when packet order and timing are compressed too early.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/lkmo2f","slide":3,"title":"Network intrusion detection must balance detail and scalability","textShapes":10}
+{"kind":"textbox","id":"sh/5w3qd8jy","slide":3,"text":"Network intrusion detection must balance detail and scalability","textPreview":"Network intrusion detection must balance detail and scalability","textChars":63,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/itc72t07","slide":3,"text":"03","textPreview":"03","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/3uloby1s","slide":3,"text":"Raw packets","textPreview":"Raw packets","textChars":11,"textLines":1,"bbox":[60,180,220,45]}
+{"kind":"textbox","id":"sh/grup0ji1","slide":3,"text":"Fine-grained order and timing\nHigh volume and variable length","textPreview":"Fine-grained order and timing | High volume and variable length","textChars":61,"textLines":2,"bbox":[60,235,260,90]}
+{"kind":"shape","id":"sh/hs369ojm","slide":3,"bbox":[330,250,90,34]}
+{"kind":"textbox","id":"sh/ups7yt0b","slide":3,"text":"Aggregate flows","textPreview":"Aggregate flows","textChars":15,"textLines":1,"bbox":[455,180,260,45]}
+{"kind":"textbox","id":"sh/vq1o7y1w","slide":3,"text":"Compact and efficient\nBut packet dynamics disappear","textPreview":"Compact and efficient | But packet dynamics disappear","textChars":51,"textLines":2,"bbox":[455,235,285,90]}
+{"kind":"shape","id":"sh/0nepcnil","slide":3,"bbox":[760,250,90,34]}
+{"kind":"textbox","id":"sh/1onqlsj6","slide":3,"text":"Independent decisions","textPreview":"Independent decisions","textChars":21,"textLines":1,"bbox":[885,180,300,45]}
+{"kind":"textbox","id":"sh/tofql0rm","slide":3,"text":"Easy to deploy\nBut related behaviour is ignored","textPreview":"Easy to deploy | But related behaviour is ignored","textChars":47,"textLines":2,"bbox":[885,235,300,90]}
+{"kind":"shape","id":"sh/sn69cva1","slide":3,"bbox":[60,430,1120,110]}
+{"kind":"textbox","id":"sh/rmx8jq9g","slide":3,"text":"Research gap","textPreview":"Research gap","textChars":12,"textLines":1,"bbox":[90,449,190,34]}
+{"kind":"textbox","id":"sh/61ora5sb","slide":3,"text":"Most systems model packet dynamics or cross-flow context — rarely both in one controlled hierarchy.","textPreview":"Most systems model packet dynamics or cross-flow context — rarely both in one controlled hierarchy.","textChars":99,"textLines":1,"bbox":[90,487,1040,42]}
+{"kind":"notes","id":"nt/lkmo2f","slide":3,"text":"A network intrusion detection system monitors traffic and predicts whether activity is benign or suspicious. Signature engines such as Suricata are effective for known patterns, while learning-based systems can model broader regularities. However, there is a trade-off. Raw packets preserve detail but are expensive. Aggregate flows are scalable but remove ordering. Finally, classifying every flow independently ignores behaviours such as scanning, repeated login attempts, or coordinated connections. This motivates the research gap: packet-level structure and cross-flow context are usually studied separately.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/fvui8h","slide":4,"title":"Two research questions define the hierarchy","textShapes":15}
+{"kind":"textbox","id":"sh/8rm9onal","slide":4,"text":"Two research questions define the hierarchy","textPreview":"Two research questions define the hierarchy","textChars":43,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/nqdsv2t0","slide":4,"text":"04","textPreview":"04","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"shape","id":"sh/mp4rmxsf","slide":4,"bbox":[42,145,560,170]}
+{"kind":"textbox","id":"sh/xwfa1cb2","slide":4,"text":"RQ1","textPreview":"RQ1","textChars":3,"textLines":1,"bbox":[70,170,100,36]}
+{"kind":"textbox","id":"sh/wv6ts7ah","slide":4,"text":"Does time-aware packet-sequence modelling produce better flow representations than aggregation alone?","textPreview":"Does time-aware packet-sequence modelling produce better flow representations than aggregation alone?","textChars":101,"textLines":1,"bbox":[70,215,490,80]}
+{"kind":"shape","id":"sh/vuxsz2tw","slide":4,"bbox":[638,145,600,170]}
+{"kind":"textbox","id":"sh/atorqxsr","slide":4,"text":"RQ2","textPreview":"RQ2","textChars":3,"textLines":1,"bbox":[668,170,100,36]}
+{"kind":"textbox","id":"sh/50za5cbe","slide":4,"text":"Does cross-flow context improve detection beyond independent flow classification?","textPreview":"Does cross-flow context improve detection beyond independent flow classification?","textChars":81,"textLines":1,"bbox":[668,215,520,80]}
+{"kind":"textbox","id":"sh/kzqtw7at","slide":4,"text":"Contributions","textPreview":"Contributions","textChars":13,"textLines":1,"bbox":[42,370,300,45]}
+{"kind":"textbox","id":"sh/qt8rah83","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[42,425,28,40]}
+{"kind":"textbox","id":"sh/ruh83mpo","slide":4,"text":"Aligned PCAP-to-learning pipeline with leakage controls","textPreview":"Aligned PCAP-to-learning pipeline with leakage controls","textChars":55,"textLines":1,"bbox":[76,425,1106,52]}
+{"kind":"textbox","id":"sh/svq9crq9","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[42,474,28,40]}
+{"kind":"textbox","id":"sh/dwzq5w7u","slide":4,"text":"Time-aware intra-flow Transformer with statistical conditioning","textPreview":"Time-aware intra-flow Transformer with statistical conditioning","textChars":63,"textLines":1,"bbox":[76,474,1106,52]}
+{"kind":"textbox","id":"sh/ex8reh8f","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[42,523,28,40]}
+{"kind":"textbox","id":"sh/fyh87mp0","slide":4,"text":"Target-query attention over relation-specific historical flows","textPreview":"Target-query attention over relation-specific historical flows","textChars":62,"textLines":1,"bbox":[76,523,1106,52]}
+{"kind":"textbox","id":"sh/0ja9grql","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[42,572,28,40]}
+{"kind":"textbox","id":"sh/1kjq9w7q","slide":4,"text":"Chronological internal and external evaluation","textPreview":"Chronological internal and external evaluation","textChars":46,"textLines":1,"bbox":[76,572,1106,52]}
+{"kind":"notes","id":"nt/fvui8h","slide":4,"text":"The work is organised around two questions. RQ1 asks whether a time-aware packet sequence produces a more informative representation than aggregate flow statistics alone. RQ2 asks whether historical context from related flows improves the final classification. The thesis contributes an aligned extraction pipeline, a time-aware Stage 1 encoder, a relation-aware Stage 2 model, and chronological evaluation on internal and external traffic.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/lr6d34","slide":5,"title":"The dataset is large, chronological, and strongly imbalanced","textShapes":16}
+{"kind":"textbox","id":"sh/fa5gvut8","slide":5,"text":"The dataset is large, chronological, and strongly imbalanced","textPreview":"The dataset is large, chronological, and strongly imbalanced","textChars":60,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/0beh4zat","slide":5,"text":"05","textPreview":"05","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/1c7yx4be","slide":5,"text":"8.62 GB","textPreview":"8.62 GB","textChars":7,"textLines":1,"bbox":[60,145,250,70]}
+{"kind":"textbox","id":"sh/2xgz6psz","slide":5,"text":"enterprise PCAP","textPreview":"enterprise PCAP","textChars":15,"textLines":1,"bbox":[60,215,250,35]}
+{"kind":"textbox","id":"sh/nyp0zutk","slide":5,"text":"11.75 M","textPreview":"11.75 M","textChars":7,"textLines":1,"bbox":[385,145,250,70]}
+{"kind":"textbox","id":"sh/ozyh8zap","slide":5,"text":"packet records","textPreview":"packet records","textChars":14,"textLines":1,"bbox":[385,215,250,35]}
+{"kind":"textbox","id":"sh/p07i14ba","slide":5,"text":"421,898","textPreview":"421,898","textChars":7,"textLines":1,"bbox":[710,145,250,70]}
+{"kind":"textbox","id":"sh/a1gza9sv","slide":5,"text":"flow records","textPreview":"flow records","textChars":12,"textLines":1,"bbox":[710,215,250,35]}
+{"kind":"textbox","id":"sh/b2p03etg","slide":5,"text":"3.945%","textPreview":"3.945%","textChars":6,"textLines":1,"bbox":[1000,145,220,70]}
+{"kind":"textbox","id":"sh/jmtsf2p0","slide":5,"text":"class-1 prevalence","textPreview":"class-1 prevalence","textChars":18,"textLines":1,"bbox":[1000,215,220,35]}
+{"kind":"shape","id":"sh/ilkb6h8f","slide":5,"bbox":[45,370,180,92]}
+{"kind":"textbox","id":"sh/5ovahc7q","slide":5,"text":"PCAP","textPreview":"PCAP","textChars":4,"textLines":1,"bbox":[55,380,160,70]}
+{"kind":"shape","id":"sh/4n2t87ql","slide":5,"bbox":[225,397,55,34]}
+{"kind":"shape","id":"sh/vytsb2po","slide":5,"bbox":[285,370,180,92]}
+{"kind":"textbox","id":"sh/uxkb2x83","slide":5,"text":"Suricata +\ncustom logger","textPreview":"Suricata + | custom logger","textChars":24,"textLines":2,"bbox":[295,380,160,70]}
+{"kind":"shape","id":"sh/hkbadc7u","slide":5,"bbox":[465,397,55,34]}
+{"kind":"shape","id":"sh/wj2t47q9","slide":5,"bbox":[525,370,180,92]}
+{"kind":"textbox","id":"sh/fudcnmp8","slide":5,"text":"aligned packet\n& flow CSVs","textPreview":"aligned packet | & flow CSVs","textChars":26,"textLines":2,"bbox":[535,380,160,70]}
+{"kind":"shape","id":"sh/et4be18n","slide":5,"bbox":[705,397,55,34]}
+{"kind":"shape","id":"sh/q98v6lsv","slide":5,"bbox":[765,370,180,92]}
+{"kind":"textbox","id":"sh/bahwfq9g","slide":5,"text":"70 / 10 / 20%\nchronological split","textPreview":"70 / 10 / 20% | chronological split","textChars":33,"textLines":2,"bbox":[775,380,160,70]}
+{"kind":"shape","id":"sh/cbqd8val","slide":5,"bbox":[945,397,55,34]}
+{"kind":"shape","id":"sh/xczeh0r6","slide":5,"bbox":[1005,370,180,92]}
+{"kind":"textbox","id":"sh/yd8va5sr","slide":5,"text":"model tensors","textPreview":"model tensors","textChars":13,"textLines":1,"bbox":[1015,380,160,70]}
+{"kind":"textbox","id":"sh/ze1wja9c","slide":5,"text":"Weak labels: class 1 means at least one Suricata alert in the flow.","textPreview":"Weak labels: class 1 means at least one Suricata alert in the flow.","textChars":67,"textLines":1,"bbox":[60,560,1120,46]}
+{"kind":"notes","id":"nt/lr6d34","slide":5,"text":"The source capture contains about 8.62 gigabytes of enterprise traffic. A custom Suricata output module extracts aligned packet and flow records in one pass. The result contains approximately 11.75 million packet rows and 421,898 flows. Only 3.945 percent of the flows have an alert-derived positive label, so accuracy alone would be misleading. Flows are sorted by start time and split chronologically into 70 percent training, 10 percent validation, and 20 percent testing. Importantly, these are weak labels: class one means that Suricata generated at least one alert in the flow; it is not independently verified attack ground truth.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/ka8qn1","slide":6,"title":"The model preserves two levels of traffic structure","textShapes":3}
+{"kind":"textbox","id":"sh/gz6lsva1","slide":6,"text":"The model preserves two levels of traffic structure","textPreview":"The model preserves two levels of traffic structure","textChars":51,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/fyd4jq9g","slide":6,"text":"06","textPreview":"06","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/twvmh0ra","slide":6,"text":"Stage 1 learns how a flow develops. Stage 2 asks whether earlier related flows change its meaning.","textPreview":"Stage 1 learns how a flow develops. Stage 2 asks whether earlier related flows change its meaning.","textChars":98,"textLines":1,"bbox":[80,600,1120,44]}
+{"kind":"image","id":"im/ju10veto","slide":6,"name":"","alt":"Two-stage thesis framework","bbox":[55,150,1170,430]}
+{"kind":"notes","id":"nt/ka8qn1","slide":6,"text":"This figure gives the full idea in one view. Stage 1 receives the ordered packet sequence and converts it into one fixed-length embedding per flow. Stage 2 treats these flow embeddings as tokens and adds historical context before producing the final benign-or-alert-associated prediction. The hierarchy therefore respects the natural structure: packets form flows, and related flows form behaviour.\n\n[Sources]\n- Thesis Figure: overall framework, generated from the author's implementation."}
+{"kind":"slide","id":"sl/4pmqxo","slide":7,"title":"Stage 1 encodes packet order and elapsed time separately","textShapes":11}
+{"kind":"textbox","id":"sh/nix4zapc","slide":7,"text":"Stage 1 encodes packet order and elapsed time separately","textPreview":"Stage 1 encodes packet order and elapsed time separately","textChars":56,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/8jq58f6x","slide":7,"text":"07","textPreview":"07","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/9kzm1kni","slide":7,"text":"Packet position","textPreview":"Packet position","textChars":15,"textLines":1,"bbox":[65,155,280,40]}
+{"kind":"textbox","id":"sh/al8napo3","slide":7,"text":"Where does the packet occur?","textPreview":"Where does the packet occur?","textChars":28,"textLines":1,"bbox":[65,200,330,36]}
+{"kind":"textbox","id":"sh/v6h43u5o","slide":7,"text":"1     2     3     4     5","textPreview":"1     2     3     4     5","textChars":25,"textLines":1,"bbox":[65,255,330,42]}
+{"kind":"textbox","id":"sh/w7q5cz69","slide":7,"text":"Cumulative time","textPreview":"Cumulative time","textChars":15,"textLines":1,"bbox":[470,155,300,40]}
+{"kind":"textbox","id":"sh/x8zm5kne","slide":7,"text":"How much time has elapsed?","textPreview":"How much time has elapsed?","textChars":26,"textLines":1,"bbox":[470,200,340,36]}
+{"kind":"textbox","id":"sh/i98nepoz","slide":7,"text":"0 μs   8 μs   13 μs        2.1 s","textPreview":"0 μs   8 μs   13 μs        2.1 s","textChars":32,"textLines":1,"bbox":[470,255,390,42]}
+{"kind":"shape","id":"sh/ja147u5k","slide":7,"bbox":[880,255,85,34]}
+{"kind":"shape","id":"sh/72lgzm1w","slide":7,"bbox":[990,195,225,140]}
+{"kind":"textbox","id":"sh/61cfqh0b","slide":7,"text":"Time-aware\nsinusoidal\nencoding","textPreview":"Time-aware | sinusoidal | encoding","textChars":30,"textLines":3,"bbox":[1010,210,185,108]}
+{"kind":"shape","id":"sh/t4ny1wj2","slide":7,"bbox":[65,400,1150,140]}
+{"kind":"textbox","id":"sh/s3uxsrih","slide":7,"text":"Why both?","textPreview":"Why both?","textChars":9,"textLines":1,"bbox":[95,425,190,38]}
+{"kind":"textbox","id":"sh/jelgvm10","slide":7,"text":"Identical packet order can represent a burst or a slow interaction. Position and elapsed time provide complementary evidence.","textPreview":"Identical packet order can represent a burst or a slow interaction. Position and elapsed time provide complementary evidence.","textChars":125,"textLines":1,"bbox":[95,470,1060,55]}
+{"kind":"notes","id":"nt/4pmqxo","slide":7,"text":"Stage 1 first projects every selected packet record into the model dimension. Standard positional encoding identifies ordinal order, but it cannot distinguish microseconds from seconds. I therefore reconstruct the inter-arrival intervals, accumulate elapsed time, apply logarithmic smoothing, and combine this coordinate with packet position in a sinusoidal encoding. The ablations later compare position only, time only, both, and no encoding.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/qyhu7x","slide":8,"title":"Stage 1 combines packet evidence with aggregate statistics","textShapes":3}
+{"kind":"textbox","id":"sh/wjm1ov6x","slide":8,"text":"Stage 1 combines packet evidence with aggregate statistics","textPreview":"Stage 1 combines packet evidence with aggregate statistics","textChars":58,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/vid0vq5c","slide":8,"text":"08","textPreview":"08","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/9gvitgn6","slide":8,"text":"Key design: flow statistics condition packet tokens through a bounded residual, rather than being copied to every packet.","textPreview":"Key design: flow statistics condition packet tokens through a bounded residual, rather than being copied to every packet.","textChars":121,"textLines":1,"bbox":[70,630,1140,40]}
+{"kind":"image","id":"im/z2xwfelc","slide":8,"name":"","alt":"Detailed two-stage model architecture","bbox":[45,120,1190,505]}
+{"kind":"notes","id":"nt/qyhu7x","slide":8,"text":"This detailed architecture shows the complete pipeline. Stage 1 uses selected packet features, time-aware encoding, a separately encoded flow-statistics branch, a masked Transformer, and hybrid attention, mean, and max pooling. Flow statistics modulate packet tokens through a bounded residual. This prevents the aggregate vector from dominating the packet pathway. Stage 2 then builds a historical context, uses the target flow as the query, gates the retrieved summary, and predicts the final probability.\n\n[Sources]\n- Thesis Figure: detailed architectural overview, created for the thesis."}
+{"kind":"slide","id":"sl/nty6th","slide":9,"title":"Stage 2 retrieves only earlier related flow embeddings","textShapes":18}
+{"kind":"textbox","id":"sh/xsj6107i","slide":9,"text":"Stage 2 retrieves only earlier related flow embeddings","textPreview":"Stage 2 retrieves only earlier related flow embeddings","textChars":54,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/a5snql87","slide":9,"text":"09","textPreview":"09","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"shape","id":"sh/b61ozq9s","slide":9,"bbox":[80,220,125,72]}
+{"kind":"textbox","id":"sh/o3a5ovq1","slide":9,"text":"z(t-4)","textPreview":"z(t-4)","textChars":6,"textLines":1,"bbox":[90,232,105,48]}
+{"kind":"shape","id":"sh/94j6x0rm","slide":9,"bbox":[255,220,125,72]}
+{"kind":"textbox","id":"sh/m18nml8v","slide":9,"text":"z(t-3)","textPreview":"z(t-3)","textChars":6,"textLines":1,"bbox":[265,232,105,48]}
+{"kind":"shape","id":"sh/n2hovq9g","slide":9,"bbox":[430,220,125,72]}
+{"kind":"textbox","id":"sh/0zq5kbq5","slide":9,"text":"z(t-2)","textPreview":"z(t-2)","textChars":6,"textLines":1,"bbox":[440,232,105,48]}
+{"kind":"shape","id":"sh/10z6tgra","slide":9,"bbox":[605,220,125,72]}
+{"kind":"textbox","id":"sh/54fexcri","slide":9,"text":"z(t-1)","textPreview":"z(t-1)","textChars":6,"textLines":1,"bbox":[615,232,105,48]}
+{"kind":"shape","id":"sh/436do7qd","slide":9,"bbox":[755,238,85,34]}
+{"kind":"shape","id":"sh/3ixwv29s","slide":9,"bbox":[875,195,210,120]}
+{"kind":"textbox","id":"sh/ihovmx87","slide":9,"text":"target z(t)\n= query","textPreview":"target z(t) | = query","textChars":19,"textLines":2,"bbox":[900,215,160,78]}
+{"kind":"textbox","id":"sh/hgfutsrm","slide":9,"text":"Possible relations","textPreview":"Possible relations","textChars":18,"textLines":1,"bbox":[70,390,270,38]}
+{"kind":"textbox","id":"sh/gf6dknq1","slide":9,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[70,440,28,40]}
+{"kind":"textbox","id":"sh/vexcr29g","slide":9,"text":"same source host","textPreview":"same source host","textChars":16,"textLines":1,"bbox":[104,440,466,52]}
+{"kind":"textbox","id":"sh/udovix8v","slide":9,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[70,486,28,40]}
+{"kind":"textbox","id":"sh/tcvupsrq","slide":9,"text":"same destination host","textPreview":"same destination host","textChars":21,"textLines":1,"bbox":[104,486,466,52]}
+{"kind":"textbox","id":"sh/8bmdgnq5","slide":9,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[70,532,28,40]}
+{"kind":"textbox","id":"sh/kvqdcny1","slide":9,"text":"shared endpoint","textPreview":"shared endpoint","textChars":15,"textLines":1,"bbox":[104,532,466,52]}
+{"kind":"textbox","id":"sh/lwze5sz6","slide":9,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[70,578,28,40]}
+{"kind":"textbox","id":"sh/yt8vadgv","slide":9,"text":"global time-only recency","textPreview":"global time-only recency","textChars":24,"textLines":1,"bbox":[104,578,466,52]}
+{"kind":"shape","id":"sh/zuhw3ihg","slide":9,"bbox":[650,405,520,135]}
+{"kind":"textbox","id":"sh/crqd8nyp","slide":9,"text":"Important scope","textPreview":"Important scope","textChars":15,"textLines":1,"bbox":[680,425,200,34]}
+{"kind":"textbox","id":"sh/xsze18za","slide":9,"text":"“Causal” means start-time ordered.\nStrict streaming availability is not yet enforced.","textPreview":"“Causal” means start-time ordered. | Strict streaming availability is not yet enforced.","textChars":85,"textLines":2,"bbox":[680,466,450,62]}
+{"kind":"notes","id":"nt/nty6th","slide":9,"text":"For each target flow, Stage 2 retrieves earlier embeddings according to a relation. The tested relations are same source host, same destination host, shared endpoint, and global chronological recency. The target embedding provides one query over the historical keys and values. A learned gate controls how much context updates the current representation. I use only earlier items in stable start-time order and never retrieve historical labels. However, this is not yet strict streaming causality, because a long flow that started earlier may not have completed when the target begins.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/erdi6j","slide":10,"title":"The evaluation emphasises minority-class and operational errors","textShapes":11}
+{"kind":"textbox","id":"sh/qtk3exkr","slide":10,"text":"The evaluation emphasises minority-class and operational errors","textPreview":"The evaluation emphasises minority-class and operational errors","textChars":63,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/xwbmpcji","slide":10,"text":"10","textPreview":"10","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"shape","id":"sh/cv2lg72x","slide":10,"bbox":[55,145,560,145]}
+{"kind":"textbox","id":"sh/zyd4rm1o","slide":10,"text":"Macro-F1","textPreview":"Macro-F1","textChars":8,"textLines":1,"bbox":[80,165,250,38]}
+{"kind":"textbox","id":"sh/yxk3ihk3","slide":10,"text":"equal weight to both classes","textPreview":"equal weight to both classes","textChars":28,"textLines":1,"bbox":[80,210,500,60]}
+{"kind":"shape","id":"sh/l0vmtcje","slide":10,"bbox":[655,145,560,145]}
+{"kind":"textbox","id":"sh/kzm5kr29","slide":10,"text":"Average Precision","textPreview":"Average Precision","textChars":17,"textLines":1,"bbox":[680,165,250,38]}
+{"kind":"textbox","id":"sh/f294fil4","slide":10,"text":"ranking quality for class 1","textPreview":"ranking quality for class 1","textChars":27,"textLines":1,"bbox":[680,210,500,60]}
+{"kind":"shape","id":"sh/e1036dkz","slide":10,"bbox":[55,335,560,145]}
+{"kind":"textbox","id":"sh/cvqp0bi5","slide":10,"text":"Class-1 F1","textPreview":"Class-1 F1","textChars":10,"textLines":1,"bbox":[80,355,250,38]}
+{"kind":"textbox","id":"sh/dwzq9gzq","slide":10,"text":"positive precision–recall balance","textPreview":"positive precision–recall balance","textChars":33,"textLines":1,"bbox":[80,400,500,60]}
+{"kind":"shape","id":"sh/q987y10z","slide":10,"bbox":[655,335,560,145]}
+{"kind":"textbox","id":"sh/rah876hk","slide":10,"text":"FPR + FP / FN","textPreview":"FPR + FP / FN","textChars":13,"textLines":1,"bbox":[680,355,250,38]}
+{"kind":"textbox","id":"sh/0zqp4vi1","slide":10,"text":"operational error burden","textPreview":"operational error burden","textChars":24,"textLines":1,"bbox":[680,400,500,60]}
+{"kind":"textbox","id":"sh/10jqd0zm","slide":10,"text":"Checkpoint: best validation AP   |   Threshold: best validation class-1 F1   |   Test remains untouched","textPreview":"Checkpoint: best validation AP   |   Threshold: best validation class-1 F1   |   Test remains untouched","textChars":103,"textLines":1,"bbox":[70,560,1140,55]}
+{"kind":"notes","id":"nt/erdi6j","slide":10,"text":"Because positive flows are rare, accuracy is not the primary metric. I emphasise macro-F1, class-one F1, average precision, false-positive rate, and absolute false-positive and false-negative counts. Checkpoints are selected using validation average precision, while the operating threshold is selected using validation class-one F1. The final test partition is used only after these choices are fixed. In the thesis logs this ranking metric is named PR-AUC, but technically it is scikit-learn average precision.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/qpnyri","slide":11,"title":"Stage 1 benefits from explicit position and time","textShapes":3}
+{"kind":"textbox","id":"sh/9g7qtg3a","slide":11,"text":"Stage 1 benefits from explicit position and time","textPreview":"Stage 1 benefits from explicit position and time","textChars":48,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/mtg7y14j","slide":11,"text":"11","textPreview":"11","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/krypwrmt","slide":11,"text":"Position + time: macro-F1 0.8882 and AP 0.8564 — above aggregation, recurrent, convolutional and encoding controls.","textPreview":"Position + time: macro-F1 0.8882 and AP 0.8564 — above aggregation, recurrent, convolutional and encoding controls.","textChars":115,"textLines":1,"bbox":[55,632,1170,38]}
+{"kind":"image","id":"im/axkfu5kz","slide":11,"name":"","alt":"Stage 1 architecture comparison","bbox":[45,115,1190,510]}
+{"kind":"notes","id":"nt/qpnyri","slide":11,"text":"The Stage 1 comparison uses a common controlled test manifest. The position-plus-time Transformer achieves the strongest overall balance, with macro-F1 of 0.8882 and average precision of 0.8564. It exceeds the flow-statistics MLP, recurrent models, convolutional models, and the encoding ablations. Time-only is stronger than position-only, while using both is strongest, supporting the claim that ordinal location and elapsed time are complementary.\n\n[Sources]\n- Thesis results: Stage 1 model comparison on the common controlled test manifest."}
+{"kind":"slide","id":"sl/2k8qv9","slide":12,"title":"Separate statistical conditioning gives the best Stage 1 fusion","textShapes":3}
+{"kind":"textbox","id":"sh/5c32dg32","slide":12,"text":"Separate statistical conditioning gives the best Stage 1 fusion","textPreview":"Separate statistical conditioning gives the best Stage 1 fusion","textChars":63,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/ipcji1kr","slide":12,"text":"12","textPreview":"12","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/sfe1ob2t","slide":12,"text":"Scheme C: macro-F1 0.8954 | AP 0.8763 | 267 FP | 293 FN","textPreview":"Scheme C: macro-F1 0.8954 | AP 0.8763 | 267 FP | 293 FN","textChars":55,"textLines":1,"bbox":[120,620,1040,48]}
+{"kind":"image","id":"im/i90vuhob","slide":12,"name":"","alt":"Stage 1 fusion comparison","bbox":[45,120,1190,485]}
+{"kind":"notes","id":"nt/2k8qv9","slide":12,"text":"This ablation compares three ways to combine packet and flow information. Scheme A repeats the aggregate vector at every packet. Scheme B uses packets only. Scheme C encodes the aggregate vector once and uses bounded token modulation. Scheme C reaches macro-F1 of 0.8954 and average precision of 0.8763, while also reducing both false positives and false negatives. The careful conclusion is that a separate statistical pathway is useful; because parameter counts also change, the entire gain cannot be assigned to FiLM alone.\n\n[Sources]\n- Thesis results: Stage 1 packet and flow-statistics integration ablation."}
+{"kind":"slide","id":"sl/9jdepf","slide":13,"title":"Source-host history gives the strongest contextual balance","textShapes":3}
+{"kind":"textbox","id":"sh/4zaxsvyd","slide":13,"text":"Source-host history gives the strongest contextual balance","textPreview":"Source-host history gives the strongest contextual balance","textChars":58,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/3y1gzqxs","slide":13,"text":"13","textPreview":"13","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/hwzyxgf2","slide":13,"text":"Source host: macro-F1 0.9275 | AP 0.9345 | FPR 0.5429%","textPreview":"Source host: macro-F1 0.9275 | AP 0.9345 | FPR 0.5429%","textChars":54,"textLines":1,"bbox":[110,625,1060,42]}
+{"kind":"image","id":"im/3ixgbqlk","slide":13,"name":"","alt":"Stage 2 relation comparison","bbox":[45,120,1190,500]}
+{"kind":"notes","id":"nt/9jdepf","slide":13,"text":"For Stage 2, the source-host relation gives the strongest combined result. It has the highest macro-F1 and average precision and the lowest false-positive rate among the tested relations. Endpoint context recovers more positive flows, but it also generates more false positives. Global time-only context is less selective. This does not prove that source history is optimal for every attack family; binary weak labels cannot identify which attack mechanisms benefit.\n\n[Sources]\n- Thesis results: Stage 2 context-relation ablation at window size 128."}
+{"kind":"slide","id":"sl/8n08j7","slide":14,"title":"Target-query attention improves ranking and both error types","textShapes":3}
+{"kind":"textbox","id":"sh/5c3mlgjm","slide":14,"text":"Target-query attention improves ranking and both error types","textPreview":"Target-query attention improves ranking and both error types","textChars":60,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/ipcnq1kb","slide":14,"text":"14","textPreview":"14","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/sfu5wb2d","slide":14,"text":"Proposed: macro-F1 0.9275 | class-1 F1 0.8610 | AP 0.9345","textPreview":"Proposed: macro-F1 0.9275 | class-1 F1 0.8610 | AP 0.9345","textChars":57,"textLines":1,"bbox":[110,625,1060,42]}
+{"kind":"image","id":"im/idkza1ov","slide":14,"name":"","alt":"Stage 2 architecture comparison","bbox":[45,120,1190,500]}
+{"kind":"notes","id":"nt/8n08j7","slide":14,"text":"The architecture comparison fixes the Stage 1 embeddings, context relation, window, objective, and evaluation protocol. The proposed target-query model obtains macro-F1 of 0.9275, class-one F1 of 0.8610, and average precision of 0.9345. It reduces both error types compared with the vanilla Transformer. Nevertheless, the no-context head is much smaller, and other baselines are not parameter matched. The result supports the integrated architecture, but it is not a pure causal estimate of historical context alone.\n\n[Sources]\n- Thesis results: Stage 2 architecture comparison on the common full-data test manifest."}
+{"kind":"slide","id":"sl/gvqhjb","slide":15,"title":"Useful discrimination transfers, but not uniformly","textShapes":15}
+{"kind":"textbox","id":"sh/i98n6xs7","slide":15,"text":"Useful discrimination transfers, but not uniformly","textPreview":"Useful discrimination transfers, but not uniformly","textChars":50,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/5cz61cry","slide":15,"text":"15","textPreview":"15","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/kbq587ad","slide":15,"text":"CICIDS2017","textPreview":"CICIDS2017","textChars":10,"textLines":1,"bbox":[55,155,320,42]}
+{"kind":"textbox","id":"sh/v6x4v29g","slide":15,"text":"Five × 20,000-flow windows","textPreview":"Five × 20,000-flow windows","textChars":26,"textLines":1,"bbox":[55,205,390,34]}
+{"kind":"textbox","id":"sh/a5on2xsv","slide":15,"text":"0.8966","textPreview":"0.8966","textChars":6,"textLines":1,"bbox":[55,260,320,75]}
+{"kind":"textbox","id":"sh/x8z6xcrm","slide":15,"text":"pooled macro-F1","textPreview":"pooled macro-F1","textChars":15,"textLines":1,"bbox":[55,335,320,34]}
+{"kind":"textbox","id":"sh/w76547a1","slide":15,"text":"0.8536–0.9226","textPreview":"0.8536–0.9226","textChars":13,"textLines":1,"bbox":[55,405,360,55]}
+{"kind":"textbox","id":"sh/f21o7m90","slide":15,"text":"window-level macro-F1 range","textPreview":"window-level macro-F1 range","textChars":27,"textLines":1,"bbox":[55,462,380,34]}
+{"kind":"shape","id":"sh/u1sneh8f","slide":15,"bbox":[500,135,2,430]}
+{"kind":"textbox","id":"sh/knmtgvml","slide":15,"text":"Company cross-server","textPreview":"Company cross-server","textChars":20,"textLines":1,"bbox":[580,155,430,42]}
+{"kind":"textbox","id":"sh/5ovup036","slide":15,"text":"38,513 flows | 3.285% positive","textPreview":"38,513 flows | 3.285% positive","textChars":30,"textLines":1,"bbox":[580,205,500,34]}
+{"kind":"textbox","id":"sh/il4bel4v","slide":15,"text":"0.9026","textPreview":"0.9026","textChars":6,"textLines":1,"bbox":[580,260,320,75]}
+{"kind":"textbox","id":"sh/jmdcnqlg","slide":15,"text":"macro-F1","textPreview":"macro-F1","textChars":8,"textLines":1,"bbox":[580,335,320,34]}
+{"kind":"textbox","id":"sh/wjmtcvmp","slide":15,"text":"0.8771","textPreview":"0.8771","textChars":6,"textLines":1,"bbox":[940,260,250,75]}
+{"kind":"textbox","id":"sh/xkvulg3a","slide":15,"text":"average precision","textPreview":"average precision","textChars":17,"textLines":1,"bbox":[940,335,250,34]}
+{"kind":"textbox","id":"sh/axkbal4j","slide":15,"text":"Conclusion: transfer is promising, but temporal and environmental shift changes the error balance.","textPreview":"Conclusion: transfer is promising, but temporal and environmental shift changes the error balance.","textChars":98,"textLines":1,"bbox":[580,430,600,90]}
+{"kind":"notes","id":"nt/gvqhjb","slide":15,"text":"External evaluation applies the source-trained model without retraining or threshold adjustment. Across five non-overlapping CICIDS2017 Wednesday windows, pooled macro-F1 is 0.8966, while individual windows range from 0.8536 to 0.9226. A separate company server capture reaches macro-F1 of 0.9026 and average precision of 0.8771. These results demonstrate useful discrimination outside the source capture, but the variation shows that transfer is not invariant across time or environment.\n\n[Sources]\n- Thesis external-evaluation tables: five CICIDS2017 windows and one company cross-server capture."}
+{"kind":"slide","id":"sl/m5gcuo","slide":16,"title":"The conclusions are strong within a deliberately limited scope","textShapes":20}
+{"kind":"textbox","id":"sh/il8bu5ov","slide":16,"text":"The conclusions are strong within a deliberately limited scope","textPreview":"The conclusions are strong within a deliberately limited scope","textChars":62,"textLines":1,"bbox":[42,30,1170,72]}
+{"kind":"textbox","id":"sh/5ozapk7m","slide":16,"text":"16","textPreview":"16","textChars":2,"textLines":1,"bbox":[1180,661,55,22]}
+{"kind":"textbox","id":"sh/4nqtwf61","slide":16,"text":"What the evidence supports","textPreview":"What the evidence supports","textChars":26,"textLines":1,"bbox":[55,145,500,42]}
+{"kind":"textbox","id":"sh/rqhsraps","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[55,205,28,40]}
+{"kind":"textbox","id":"sh/6p8by5o7","slide":16,"text":"Packet order and elapsed time are complementary","textPreview":"Packet order and elapsed time are complementary","textChars":47,"textLines":1,"bbox":[89,205,516,52]}
+{"kind":"textbox","id":"sh/tsjatk7y","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[55,265,28,40]}
+{"kind":"textbox","id":"sh/srqt0f6d","slide":16,"text":"Aggregate statistics still add information","textPreview":"Aggregate statistics still add information","textChars":42,"textLines":1,"bbox":[89,265,516,52]}
+{"kind":"textbox","id":"sh/fu1cvupo","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[55,325,28,40]}
+{"kind":"textbox","id":"sh/etsb2po3","slide":16,"text":"Selective source-host context improves the tested detector","textPreview":"Selective source-host context improves the tested detector","textChars":58,"textLines":1,"bbox":[89,325,516,52]}
+{"kind":"textbox","id":"sh/wfqp0v65","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[55,385,28,40]}
+{"kind":"textbox","id":"sh/x0zqt07q","slide":16,"text":"External performance remains useful but variable","textPreview":"External performance remains useful but variable","textChars":48,"textLines":1,"bbox":[89,385,516,52]}
+{"kind":"textbox","id":"sh/ad87yloz","slide":16,"text":"What it does not yet establish","textPreview":"What it does not yet establish","textChars":30,"textLines":1,"bbox":[680,145,500,42]}
+{"kind":"textbox","id":"sh/beh8rqpk","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[680,205,28,40]}
+{"kind":"textbox","id":"sh/k3qp4v61","slide":16,"text":"Independently verified attack ground truth","textPreview":"Independently verified attack ground truth","textChars":42,"textLines":1,"bbox":[714,205,516,52]}
+{"kind":"textbox","id":"sh/l4jqx07m","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[680,265,28,40]}
+{"kind":"textbox","id":"sh/y18725ov","slide":16,"text":"Strict streaming availability at target start","textPreview":"Strict streaming availability at target start","textChars":45,"textLines":1,"bbox":[714,265,516,52]}
+{"kind":"textbox","id":"sh/j2h8vqpg","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[680,325,28,40]}
+{"kind":"textbox","id":"sh/87a98f6d","slide":16,"text":"Statistical significance across random seeds","textPreview":"Statistical significance across random seeds","textChars":44,"textLines":1,"bbox":[714,325,516,52]}
+{"kind":"textbox","id":"sh/t8jq1k7i","slide":16,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[680,385,28,40]}
+{"kind":"textbox","id":"sh/hofql0z2","slide":16,"text":"Universal transfer across networks and attack families","textPreview":"Universal transfer across networks and attack families","textChars":54,"textLines":1,"bbox":[714,385,516,52]}
+{"kind":"notes","id":"nt/m5gcuo","slide":16,"text":"The evidence supports four conclusions. Packet order and elapsed time contribute complementary information. Aggregate statistics remain useful when they condition rather than replace packet evidence. Selective source-host history improves the evaluated detector. Finally, discrimination transfers to the two external sources, although unevenly. The thesis does not establish independently verified attack ground truth, strict online availability, statistical significance across seeds, or universal cross-network generalisation. These limitations define the next experiments rather than invalidating the observed results.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}
+{"kind":"slide","id":"sl/vt5jid","slide":17,"title":"Takeaway","textShapes":5}
+{"kind":"textbox","id":"sh/qxw3u50j","slide":17,"text":"Takeaway","textPreview":"Takeaway","textChars":8,"textLines":1,"bbox":[42,42,300,40]}
+{"kind":"textbox","id":"sh/dk7m5kza","slide":17,"text":"Network traffic is hierarchical.\nThe detector should be too.","textPreview":"Network traffic is hierarchical. | The detector should be too.","textChars":60,"textLines":2,"bbox":[42,165,1050,160]}
+{"kind":"textbox","id":"sh/cje5wfip","slide":17,"text":"Stage 1: how the flow develops","textPreview":"Stage 1: how the flow develops","textChars":30,"textLines":1,"bbox":[42,430,500,40]}
+{"kind":"textbox","id":"sh/zmp47ah0","slide":17,"text":"Stage 2: how earlier related flows change its meaning","textPreview":"Stage 2: how earlier related flows change its meaning","textChars":53,"textLines":1,"bbox":[42,482,760,40]}
+{"kind":"textbox","id":"sh/ylgnyp0f","slide":17,"text":"Questions?","textPreview":"Questions?","textChars":10,"textLines":1,"bbox":[42,595,300,50]}
+{"kind":"notes","id":"nt/vt5jid","slide":17,"text":"To conclude, network traffic is naturally hierarchical, and the detector benefits from respecting that hierarchy. Stage 1 models how a flow develops internally through packet order and elapsed time. Stage 2 asks how earlier related flows change the interpretation of the target. Together, these two levels improve alert-associated flow classification in the evaluated settings. Thank you for your attention. I welcome your questions.\n\n[Sources]\n- Thesis: A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection, Xiaoyan Xiong, 2026."}

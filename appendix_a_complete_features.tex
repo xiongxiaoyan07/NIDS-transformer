@@ -1,0 +1,161 @@
+\chapter{Complete Packet and Flow Field Specification}
+\label{app:feature_specification}
+
+Tables~\ref{tab:appendix_all_packet_fields} and~\ref{tab:appendix_all_flow_fields} document the complete raw schemas emitted by the custom Suricata output module. Mean, standard-deviation, variance, minimum, and maximum values are calculated online by the extractor; standard deviations and variances use the sample definition when at least two observations are available. Values described below precede the train-fitted transformations used by Stage~1.
+
+\begin{longtable}{@{}p{4.25cm}p{10.15cm}@{}}
+    \caption{Complete packet CSV field specification.}
+    \label{tab:appendix_all_packet_fields} \\
+    \toprule
+    Field & Implementation meaning and unit before transformation \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Field & Implementation meaning and unit before transformation \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+
+    \datasetfield{record_type} & Constant logging descriptor \datasetfield{packet}; no physical unit. \\
+    \datasetfield{packet_id} & Packet counter supplied by Suricata for the replayed capture; integer identifier with no physical unit. \\
+    \datasetfield{timestamp_us} & Packet timestamp expressed as microseconds since the Unix epoch. \\
+    \datasetfield{ts_sec} & Whole-second component of the packet timestamp, in seconds since the Unix epoch. \\
+    \datasetfield{ts_usec} & Microsecond component within \datasetfield{ts_sec}, in microseconds. \\
+    \datasetfield{flow_id} & Suricata bidirectional-flow identifier used to align packet and flow records; integer identifier with no physical unit. \\
+    \datasetfield{direction} & Suricata flow direction: 0 for to-server, 1 for to-client, and $-1$ when direction is unavailable. \\
+    \datasetfield{ip_version} & IP version: normally 4 for IPv4, 6 for IPv6, and 0 when unavailable. \\
+    \datasetfield{src_ip} & Source IPv4 or IPv6 address as a string. \\
+    \datasetfield{dst_ip} & Destination IPv4 or IPv6 address as a string. \\
+    \datasetfield{src_port} & TCP or UDP source port number; zero when no supported transport header is available. \\
+    \datasetfield{dst_port} & TCP or UDP destination port number; zero when no supported transport header is available. \\
+    \datasetfield{protocol} & IP protocol number, for example 6 for TCP, 17 for UDP, or 1 for ICMPv4. \\
+    \datasetfield{pkt_len} & Captured packet length returned by Suricata's packet-length accessor, in bytes. \\
+    \datasetfield{ip_len} & IPv4 total length, or the IPv6 40-byte fixed header plus its payload-length field, in bytes; captured packet length is used as a fallback. \\
+    \datasetfield{payload_len} & Suricata packet payload length, in bytes; this is a scalar length and not payload content. \\
+    \datasetfield{ttl_or_hop_limit} & IPv4 time-to-live or IPv6 hop limit, in hops; $-1$ when unavailable. \\
+    \datasetfield{has_tcp} & One when a TCP header is available; otherwise zero. \\
+    \datasetfield{has_udp} & One when a UDP header is available; otherwise zero. \\
+    \datasetfield{has_icmp} & One when an ICMPv4 header is available; otherwise zero. \\
+    \datasetfield{tcp_seq} & TCP sequence number in host byte order; zero for non-TCP packets. \\
+    \datasetfield{tcp_ack} & TCP acknowledgement number in host byte order; zero for non-TCP packets. \\
+    \datasetfield{tcp_flags} & Integer bit mask containing the TCP control flags; zero for non-TCP packets. \\
+    \datasetfield{tcp_fin} & One when the TCP FIN flag is present; otherwise zero. \\
+    \datasetfield{tcp_syn} & One when the TCP SYN flag is present; otherwise zero. \\
+    \datasetfield{tcp_rst} & One when the TCP RST flag is present; otherwise zero. \\
+    \datasetfield{tcp_psh} & One when the TCP PSH flag is present; otherwise zero. \\
+    \datasetfield{tcp_ack_flag} & One when the TCP ACK flag is present; otherwise zero. \\
+    \datasetfield{tcp_urg} & One when the TCP URG flag is present; otherwise zero. \\
+    \datasetfield{tcp_ece} & One when the TCP ECE flag is present; otherwise zero. \\
+    \datasetfield{tcp_cwr} & One when the TCP CWR flag is present; otherwise zero. \\
+    \datasetfield{tcp_window} & Raw, unscaled 16-bit advertised TCP receive-window value; zero for non-TCP packets. \\
+    \datasetfield{tcp_header_len} & TCP header length, in bytes; zero when no TCP header is available. \\
+    \datasetfield{udp_len} & UDP length field, including the UDP header and data, in bytes; zero for non-UDP packets. \\
+    \datasetfield{icmp_type} & ICMPv4 type; zero when no ICMPv4 header is available. \\
+    \datasetfield{icmp_code} & ICMPv4 code; zero when no ICMPv4 header is available. \\
+    \datasetfield{l7_proto} & Suricata application-layer protocol identifier associated with the flow; zero when unavailable. \\
+    \datasetfield{flow_iat_us} & Elapsed time since the preceding packet in the same bidirectional flow, in microseconds; zero when no valid predecessor exists. \\
+    \datasetfield{direction_iat_us} & Elapsed time since the preceding packet in the same Suricata direction, in microseconds; zero when no valid same-direction predecessor exists. \\
+    \datasetfield{packet_label} & Binary alert-derived target: one when the packet has at least one Suricata alert, otherwise zero. \\
+\end{longtable}
+
+\begin{longtable}{@{}p{4.55cm}p{9.85cm}@{}}
+    \caption{Complete flow CSV field specification.}
+    \label{tab:appendix_all_flow_fields} \\
+    \toprule
+    Field & Implementation meaning and unit before transformation \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Field & Implementation meaning and unit before transformation \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+
+    \datasetfield{flow_id} & Suricata bidirectional-flow identifier shared with the packet CSV; integer identifier with no physical unit. \\
+    \datasetfield{flow_start_timestamp_us} & Timestamp of the earliest logged packet in the flow, in microseconds since the Unix epoch. \\
+    \datasetfield{flow_end_timestamp_us} & Timestamp of the latest logged packet in the flow, in microseconds since the Unix epoch. \\
+    \datasetfield{source_ip} & Source address recorded for the bidirectional flow, as an IPv4 or IPv6 string. \\
+    \datasetfield{source_port} & Source TCP or UDP port recorded for the flow; zero when unavailable. \\
+    \datasetfield{destination_ip} & Destination address recorded for the bidirectional flow, as an IPv4 or IPv6 string. \\
+    \datasetfield{destination_port} & Destination TCP or UDP port recorded for the flow; zero when unavailable. \\
+    \datasetfield{protocol} & IP protocol number associated with the flow. \\
+    \datasetfield{flow_duration} & Difference between the final and first logged packet timestamps, in microseconds. \\
+    \datasetfield{total_fwd_packets} & Number of to-server packets in the flow. \\
+    \datasetfield{total_backward_packets} & Number of to-client packets in the flow. \\
+    \datasetfield{total_length_of_fwd_packets} & Sum of forward packet payload lengths, in bytes. \\
+    \datasetfield{total_length_of_bwd_packets} & Sum of backward packet payload lengths, in bytes. \\
+    \datasetfield{fwd_packet_length_max} & Maximum forward packet payload length, in bytes. \\
+    \datasetfield{fwd_packet_length_min} & Minimum forward packet payload length, in bytes. \\
+    \datasetfield{fwd_packet_length_mean} & Mean forward packet payload length, in bytes. \\
+    \datasetfield{fwd_packet_length_std} & Sample standard deviation of forward packet payload length, in bytes. \\
+    \datasetfield{bwd_packet_length_max} & Maximum backward packet payload length, in bytes. \\
+    \datasetfield{bwd_packet_length_min} & Minimum backward packet payload length, in bytes. \\
+    \datasetfield{bwd_packet_length_mean} & Mean backward packet payload length, in bytes. \\
+    \datasetfield{bwd_packet_length_std} & Sample standard deviation of backward packet payload length, in bytes. \\
+    \datasetfield{flow_bytes_per_s} & Sum of forward and backward payload bytes divided by flow duration, in bytes per second. \\
+    \datasetfield{flow_packets_per_s} & Total packet count divided by flow duration, in packets per second. \\
+    \datasetfield{flow_iat_mean} & Mean inter-arrival time between successive packets in the bidirectional flow, in microseconds. \\
+    \datasetfield{flow_iat_std} & Sample standard deviation of bidirectional-flow inter-arrival time, in microseconds. \\
+    \datasetfield{flow_iat_max} & Maximum bidirectional-flow inter-arrival time, in microseconds. \\
+    \datasetfield{flow_iat_min} & Minimum bidirectional-flow inter-arrival time, in microseconds. \\
+    \datasetfield{fwd_iat_total} & Elapsed time from the first to the last forward packet, in microseconds. \\
+    \datasetfield{fwd_iat_mean} & Mean inter-arrival time between successive forward packets, in microseconds. \\
+    \datasetfield{fwd_iat_std} & Sample standard deviation of forward inter-arrival time, in microseconds. \\
+    \datasetfield{fwd_iat_max} & Maximum forward inter-arrival time, in microseconds. \\
+    \datasetfield{fwd_iat_min} & Minimum forward inter-arrival time, in microseconds. \\
+    \datasetfield{bwd_iat_total} & Elapsed time from the first to the last backward packet, in microseconds. \\
+    \datasetfield{bwd_iat_mean} & Mean inter-arrival time between successive backward packets, in microseconds. \\
+    \datasetfield{bwd_iat_std} & Sample standard deviation of backward inter-arrival time, in microseconds. \\
+    \datasetfield{bwd_iat_max} & Maximum backward inter-arrival time, in microseconds. \\
+    \datasetfield{bwd_iat_min} & Minimum backward inter-arrival time, in microseconds. \\
+    \datasetfield{fwd_psh_flags} & Number of forward TCP packets carrying the PSH flag. \\
+    \datasetfield{bwd_psh_flags} & Number of backward TCP packets carrying the PSH flag. \\
+    \datasetfield{fwd_urg_flags} & Number of forward TCP packets carrying the URG flag. \\
+    \datasetfield{bwd_urg_flags} & Number of backward TCP packets carrying the URG flag. \\
+    \datasetfield{fwd_header_length} & Sum of forward IP and layer-4 header lengths, in bytes. \\
+    \datasetfield{bwd_header_length} & Sum of backward IP and layer-4 header lengths, in bytes. \\
+    \datasetfield{fwd_packets_per_s} & Forward packet count divided by flow duration, in packets per second. \\
+    \datasetfield{bwd_packets_per_s} & Backward packet count divided by flow duration, in packets per second. \\
+    \datasetfield{min_packet_length} & Minimum payload length over all packets in the flow, in bytes. \\
+    \datasetfield{max_packet_length} & Maximum payload length over all packets in the flow, in bytes. \\
+    \datasetfield{packet_length_mean} & Mean payload length over all packets in the flow, in bytes. \\
+    \datasetfield{packet_length_std} & Sample standard deviation of payload length over all packets, in bytes. \\
+    \datasetfield{packet_length_variance} & Sample variance of payload length over all packets, in squared bytes. \\
+    \datasetfield{fin_flag_count} & Number of TCP packets carrying the FIN flag. \\
+    \datasetfield{syn_flag_count} & Number of TCP packets carrying the SYN flag. \\
+    \datasetfield{rst_flag_count} & Number of TCP packets carrying the RST flag. \\
+    \datasetfield{psh_flag_count} & Number of TCP packets carrying the PSH flag. \\
+    \datasetfield{ack_flag_count} & Number of TCP packets carrying the ACK flag. \\
+    \datasetfield{urg_flag_count} & Number of TCP packets carrying the URG flag. \\
+    \datasetfield{cwe_flag_count} & Legacy CSV field name for the number of TCP packets carrying the CWR flag; the implementation tests \datasetfield{TH_CWR}. \\
+    \datasetfield{ece_flag_count} & Number of TCP packets carrying the ECE flag. \\
+    \datasetfield{down_up_ratio} & Backward packet count divided by forward packet count; zero when the forward count is zero. \\
+    \datasetfield{average_packet_size} & Total forward and backward payload bytes divided by total packet count, in bytes. \\
+    \datasetfield{avg_fwd_segment_size} & Mean forward payload length, in bytes; equivalent to \datasetfield{fwd_packet_length_mean} in this extractor. \\
+    \datasetfield{avg_bwd_segment_size} & Mean backward payload length, in bytes; equivalent to \datasetfield{bwd_packet_length_mean} in this extractor. \\
+    \datasetfield{has_init_win_bytes_forward} & One when an initial forward TCP receive-window value was observed; otherwise zero. \\
+    \datasetfield{init_win_bytes_forward} & Raw, unscaled advertised TCP receive-window value from the first observed forward TCP packet; zero when unavailable. \\
+    \datasetfield{has_init_win_bytes_backward} & One when an initial backward TCP receive-window value was observed; otherwise zero. \\
+    \datasetfield{init_win_bytes_backward} & Raw, unscaled advertised TCP receive-window value from the first observed backward TCP packet; zero when unavailable. \\
+    \datasetfield{act_data_pkt_fwd} & Number of forward TCP packets whose Suricata payload length is greater than zero. \\
+    \datasetfield{min_seg_size_forward} & Minimum layer-4 header length observed in the forward direction, in bytes; this follows the implementation despite the legacy field name. \\
+    \datasetfield{active_mean} & Mean duration of active periods, in microseconds; a new period begins after a flow IAT greater than 5,000,000 microseconds. \\
+    \datasetfield{active_std} & Sample standard deviation of active-period duration, in microseconds. \\
+    \datasetfield{active_max} & Maximum active-period duration, in microseconds. \\
+    \datasetfield{active_min} & Minimum active-period duration, in microseconds. \\
+    \datasetfield{idle_mean} & Mean separating idle gap greater than 5,000,000 microseconds, in microseconds. \\
+    \datasetfield{idle_std} & Sample standard deviation of separating idle gaps, in microseconds. \\
+    \datasetfield{idle_max} & Maximum separating idle gap, in microseconds. \\
+    \datasetfield{idle_min} & Minimum separating idle gap, in microseconds. \\
+    \datasetfield{label} & Binary flow target: one when at least one packet in the flow has a Suricata alert, otherwise zero. \\
+\end{longtable}
