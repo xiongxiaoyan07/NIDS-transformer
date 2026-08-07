@@ -1,0 +1,170 @@
+{
+  "input": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\Defense_Professor_Questions_and_Answers_Xiaoyan_Xiong.docx",
+  "fonts_by_char_count": {
+    "Calibri": 62924
+  },
+  "direct_run_formatting_runs": 991,
+  "direct_paragraph_formatting_paragraphs": 588,
+  "heading_like_paragraphs_not_heading_style": [
+    {
+      "para_index": 4,
+      "text": "MSc Thesis Defense Preparation",
+      "style": "Normal"
+    },
+    {
+      "para_index": 5,
+      "text": "Professor Questions and Answers",
+      "style": "Normal"
+    },
+    {
+      "para_index": 6,
+      "text": "\u6559\u6388\u53ef\u80fd\u63d0\u95ee\u4e0e\u7b54\u8fa9\u53c2\u8003\u56de\u7b54",
+      "style": "Normal"
+    },
+    {
+      "para_index": 8,
+      "text": "Xiaoyan Xiong",
+      "style": "Normal"
+    },
+    {
+      "para_index": 74,
+      "text": "\u7814\u7a76\u5b9a\u4f4d\u3001\u7814\u7a76\u95ee\u9898\u4e0e\u8d21\u732e",
+      "style": "Normal"
+    },
+    {
+      "para_index": 76,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4f60\u80fd\u7528\u4e00\u53e5\u8bdd\u89e3\u91ca\u4f60\u7684\u8bba\u6587\u5417\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 82,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u8bba\u6587\u7684\u6838\u5fc3\u7814\u7a76\u95ee\u9898\u662f\u4ec0\u4e48\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 88,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4f60\u7684\u7b2c\u4e00\u4e2a\u7814\u7a76\u95ee\u9898\u662f\u4ec0\u4e48\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 90,
+      "text": "\u4e2d\u6587\u56de\u7b54\u903b\u8f91\uff1a\u5fc5\u987b\u4f7f\u7528\u8bba\u6587\u539f\u8bdd\u3002\u56de\u7b54\u65f6\u8865\u5145\u8bc1\u636e\u6765\u6e90\uff1aflow MLP \u5bf9\u7167\u3001position/time \u6d88\u878d\u548c fusion \u6d88\u878d\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 94,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4f60\u7684\u7b2c\u4e8c\u4e2a\u7814\u7a76\u95ee\u9898\u662f\u4ec0\u4e48\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 100,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4e3a\u4ec0\u4e48\u4f60\u7684\u6a21\u578b\u662f hierarchical \u7684\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 102,
+      "text": "\u4e2d\u6587\u56de\u7b54\u903b\u8f91\uff1ahierarchical \u6307\u6570\u636e\u7ed3\u6784\u548c\u5efa\u6a21\u5c42\u6b21\uff0c\u4e0d\u662f\u7b80\u5355\u5730\u628a\u4e24\u4e2a\u7f51\u7edc\u5806\u5728\u4e00\u8d77\u3002\u6700\u7ec8\u9884\u6d4b\u7c92\u5ea6\u4ecd\u7136\u662f flow\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 106,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4f60\u7684\u771f\u6b63\u521b\u65b0\u70b9\u662f\u4ec0\u4e48\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 112,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u8bba\u6587\u7684\u4e3b\u8981\u8d21\u732e\u6709\u54ea\u4e9b\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 114,
+      "text": "\u4e2d\u6587\u56de\u7b54\u903b\u8f91\uff1a\u7b54\u8fa9\u4e2d\u6700\u597d\u660e\u786e\u8bf4\u56db\u9879\uff1a\u6570\u636e\u6d41\u7a0b\u3001Stage 1\u3001Stage 2\u3001\u5916\u90e8\u8bc4\u4f30\u3002\u8fd9\u6837\u4e0e PPT \u5185\u5bb9\u4e00\u81f4\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 118,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u8bba\u6587\u5199\u7740 three principal contributions\uff0c\u4f46\u540e\u9762\u5217\u4e86\u56db\u9879\uff0c\u8fd9\u662f\u9519\u8bef\u5417\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 120,
+      "text": "\u4e2d\u6587\u56de\u7b54\u903b\u8f91\uff1a\u8fd9\u662f\u4e00\u4e2a\u771f\u5b9e\u7684\u6587\u5b57\u4e0d\u4e00\u81f4\uff0c\u4e0d\u80fd\u5f3a\u884c\u8fa9\u89e3\u3002\u76f4\u63a5\u627f\u8ba4\uff0c\u7136\u540e\u89e3\u91ca\u66f4\u6e05\u695a\u7684\u5206\u7c7b\u65b9\u5f0f\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 124,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u4e3a\u4ec0\u4e48\u4e24\u4e2a stage \u5206\u5f00\u8bad\u7ec3\uff0c\u800c\u4e0d\u662f\u7aef\u5230\u7aef\u8bad\u7ec3\uff1f",
+      "style": "Normal"
+    },
+    {
+      "para_index": 126,
+      "text": "\u4e2d\u6587\u56de\u7b54\u903b\u8f91\uff1a\u4f18\u70b9\u662f\u53ef\u89e3\u91ca\u7684\u5b9e\u9a8c\u5f52\u56e0\u3001\u53ef\u590d\u7528 embedding\u3001\u8d44\u6e90\u53ef\u63a7\uff1b\u7f3a\u70b9\u662f\u5931\u53bb end-to-end optimization\u3002\u5fc5\u987b\u540c\u65f6\u8bf4\u4f18\u70b9\u548c\u4ee3\u4ef7\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 130,
+      "text": "\u4e2d\u6587\u95ee\u9898\uff1a\u7cfb\u7edf\u6700\u7ec8\u9884\u6d4b\u7684\u5bf9\u8c61\u662f\u4ec0\u4e48\uff1f",
+      "style": "Normal"
+    }
+  ],
+  "examples": {
+    "direct_paragraph_formatting": [
+      {
+        "para_index": 1,
+        "text": "",
+        "style": "Normal"
+      },
+      {
+        "para_index": 2,
+        "text": "",
+        "style": "Normal"
+      },
+      {
+        "para_index": 3,
+        "text": "",
+        "style": "Normal"
+      },
+      {
+        "para_index": 4,
+        "text": "MSc Thesis Defense Preparation",
+        "style": "Normal"
+      },
+      {
+        "para_index": 5,
+        "text": "Professor Questions and Answers",
+        "style": "Normal"
+      }
+    ],
+    "direct_run_formatting": [
+      {
+        "para_index": 4,
+        "run_text": "MSc Thesis Defense Preparation",
+        "style": "Normal"
+      },
+      {
+        "para_index": 5,
+        "run_text": "Professor Questions and Answers",
+        "style": "Normal"
+      },
+      {
+        "para_index": 6,
+        "run_text": "\u6559\u6388\u53ef\u80fd\u63d0\u95ee\u4e0e\u7b54\u8fa9\u53c2\u8003\u56de\u7b54",
+        "style": "Normal"
+      },
+      {
+        "para_index": 7,
+        "run_text": "A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection",
+        "style": "Normal"
+      },
+      {
+        "para_index": 8,
+        "run_text": "Xiaoyan Xiong",
+        "style": "Normal"
+      }
+    ]
+  },
+  "notes": [
+    "Direct formatting is not always wrong, but it often causes inconsistent output when templates change.",
+    "Heading-like paragraphs not using Heading styles can break TOC and accessibility."
+  ]
+}

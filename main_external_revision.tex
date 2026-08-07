@@ -1,0 +1,1795 @@
+\documentclass[11pt,fleqn]{report}
+\usepackage{mcs}
+
+\usepackage[T1]{fontenc}
+\usepackage{csquotes}
+\usepackage{booktabs}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{tikz}
+\usepackage{amsmath}
+\usepackage{float}
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage{pdflscape}
+
+% Format chapters as continuous headings without forced page breaks.
+\titleclass{\chapter}{straight}
+
+% Chapter heading format.
+\titleformat{\chapter}[hang]
+  {\normalfont\LARGE\bfseries}
+  {\thechapter}
+  {1em}
+  {}
+
+% Spacing before and after chapter headings.
+\titlespacing*{\chapter}
+  {0pt}
+  {2em}
+  {1em}
+  
+\usetikzlibrary{positioning}
+\usetikzlibrary{arrows.meta}
+\usetikzlibrary{shapes.geometric}
+
+\hypersetup{
+  pdftitle = {MSc thesis},
+  pdfauthor = {Xiaoyan Xiong}
+}
+
+\coverauthor{Xiaoyan Xiong}
+\supervisor{Le Viet Duc}
+\covertitle{A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection}
+\doctype{Final Project}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+\makecoverpage
+\tableofcontents
+\begin{abstract}
+Many flow-level network intrusion detection pipelines reduce each connection to aggregate measurements and then classify flows in isolation. This efficient abstraction suppresses packet ordering and non-uniform timing, and it can obscure evidence that becomes visible only across related connections. To retain both levels of structure, this thesis develops a hierarchical detector that does not consume payload content. Aligned packet records and flow statistics are extracted from an enterprise PCAP through a custom Suricata output module. Stage~1 combines positional and cumulative-time information when encoding the ordered packet metadata, conditions the packet tokens on flow statistics, and exports a fused representation for each flow. In Stage~2, the target representation queries a start-time-ordered history of earlier related flow embeddings before the final prediction is produced.
+
+Chronological partitions are used throughout the evaluation. Because positive flows are scarce, the analysis gives priority to macro-F1, PR-AUC (computed as average precision), attack-class performance, confusion matrices, and false-positive rate. On the controlled Stage~1 flow test manifest, the complete fused representation reaches a macro-F1 of 0.8955 and a PR-AUC of 0.8763, exceeding the aggregate-flow, recurrent, convolutional, and encoding controls. On the separate Stage~2 flow manifest, source-host context raises macro-F1 from 0.8954 to 0.9275 and PR-AUC from 0.8763 to 0.9345 while reducing both types of classification error. The target-query model also surpasses the no-context, vanilla Transformer, LSTM, GRU, and CNN--LSTM alternatives, with model-level latency comparable to that of the vanilla Transformer. External evaluation uses five non-overlapping 20,000-flow windows from the public CICIDS2017 Wednesday capture and a 38,513-flow company capture obtained from a different server. Pooled macro-F1 across the five public windows is 0.8966, while the separate-server capture reaches 0.9026. Taken together, the results indicate that explicit intra-flow timing and selective inter-flow context supply complementary and partly transferable evidence, although performance varies across external time windows and training-run variability remains unestimated.
+
+  \begin{keywords}
+   Network intrusion detection, packet sequence, time-aware Transformer, flow representation, cross-flow context, class imbalance
+  \end{keywords}
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\chapter{Introduction}
+\label{sec:introduction}
+
+Enterprise systems, cloud platforms, mobile networks, and Internet-of-Things (IoT) deployments collectively produce large and heterogeneous traffic streams. Continuous monitoring is needed to identify activities such as reconnaissance, exploitation attempts, botnet communication, distributed denial-of-service (DDoS), and multi-stage intrusion campaigns. Network Intrusion Detection Systems (NIDSs) consequently form an important layer of cyber-security infrastructure \cite{Roesch1999,SommerPaxson2010}. Their practical design nevertheless remains difficult. Contemporary attacks may be distributed, adaptive, and temporally extended, while encryption restricts direct payload inspection and increases reliance on headers, metadata, and behavioural traffic characteristics \cite{Sharma2025EncryptedSurvey,Dong2025EncryptedPretrain}.
+
+Operational deployments continue to rely on signature engines such as Snort and Suricata because their rules are interpretable, computationally efficient, and effective against known threats \cite{Roesch1999,SuricataGuide2026}. Suspicious traffic is recognised through patterns designed and maintained by domain experts. Such rules remain valuable, but their coverage is necessarily bounded: unseen attacks and evolving variants may not match an existing signature, and malicious intent may emerge only from temporal or contextual regularities spanning several flows \cite{SommerPaxson2010,Hozouri2025Survey}. Rule-based analysis alone is therefore unlikely to provide sufficient coverage as traffic volumes and attack behaviours continue to diversify.
+
+Learning-based NIDSs seek greater adaptability by estimating decision boundaries from observed traffic rather than depending exclusively on predefined rules. In conventional pipelines, a bidirectional flow is represented by aggregate features such as its duration, packet and byte counts, rates, and inter-arrival-time statistics \cite{BuczakGuven2016,Ahmed2016Survey}. Compact fixed-length vectors support efficient large-scale processing, but the compression removes detail about the process that generated each flow. Packet order, bursts, directional transitions, and uneven temporal gaps can all disappear during aggregation. For attacks whose distinguishing evidence lies in how a connection unfolds rather than only in its total volume, that information loss is consequential.
+
+Richer traffic representations have been investigated with convolutional and recurrent neural networks, LSTMs, GRUs, and autoencoder-based architectures \cite{Yin2017RNNIDS,Shone2018NNAE,Mirsky2018Kitsune}. These models can capture non-linear feature interactions while reducing manual feature engineering. Yet their inputs often remain aggregate flow records. In some sequence-based studies, the sequence is formed from fixed-size flow attributes rather than the packets observed within a connection. Such formulations preserve only part of the natural hierarchy of network traffic: packets constitute flows, and related flows in turn express host- or endpoint-level behaviour.
+
+Self-attention offers a suitable mechanism for addressing this hierarchy because distant sequence elements can interact directly and training can be parallelised \cite{Vaswani2017}. Transformer-based systems have consequently achieved competitive results in traffic classification and intrusion detection \cite{Wu2022RTIDS,Han2023GTID,Manocchio2024FlowTransformer}. Time-aware variants show, in particular, that detection can benefit when order and elapsed time are encoded as distinct signals \cite{Han2023GTID}; FlowTransformer demonstrates the architectural flexibility available for flow-based NIDS evaluation \cite{Manocchio2024FlowTransformer}. Even so, a substantial portion of this literature continues to represent each flow as one flat item. Packet-level dynamics inside a flow and contextual dependencies between flows are seldom modelled together.
+
+To address this gap, the thesis organises detection into two stages. Raw PCAP traffic is first converted into aligned packet records and flow statistics by a custom Suricata output module. Stage~1 derives a flow representation from packet order, elapsed time, and aggregate measurements. A bounded causal history of related representations is then used by Stage~2 to refine the flow-level decision. Separating these operations permits intra-flow representation learning and inter-flow reasoning to be assessed independently without changing the final prediction granularity.
+
+The central research problem of this thesis is therefore:
+
+\begin{displayquote}
+How can network intrusion detection benefit from packet-level temporal modelling and cross-flow contextual modelling while preserving the hierarchical structure of network traffic?
+\end{displayquote}
+
+To answer this question, the thesis studies two research questions:
+
+\begin{itemize}
+    \item \textbf{RQ1:} Does time-aware packet-sequence modelling produce more informative flow representations than flow-level aggregation alone?
+    \item \textbf{RQ2:} Does incorporating cross-flow context improve flow-level intrusion detection compared with independent per-flow classification?
+\end{itemize}
+
+The thesis makes three principal contributions:
+
+\begin{itemize}
+    \item An aligned PCAP-to-learning pipeline built around a custom Suricata output module, with explicit separation among predictive variables, context identifiers, and alert-derived targets.
+    \item A Stage~1 representation that integrates packet position, cumulative elapsed time, mask-aware self-attention, and bounded flow-conditioned token modulation.
+    \item A causal Stage~2 target-query attention model that draws evidence from relation-specific histories while excluding future flows and historical labels.
+    \item External evaluation on chronological windows from the public CICIDS2017 Wednesday capture and on a separate company-provided server capture, complementing the source-domain chronological test.
+    % \item A controlled evaluation of representation, fusion, sequence length, context relation, context capacity, architecture, and computational cost under class imbalance.
+\end{itemize}
+
+Given the low prevalence of the positive class, macro-F1, PR-AUC, attack-class performance, and false-positive rate carry more interpretive weight than accuracy alone.
+
+\chapter{Related Work}
+\label{sec:related_work}
+
+Research on network intrusion detection spans manually specified signatures and data-driven models learned from packet traces, flow records, or ordered network events. The literature can be organised along two dimensions: representation granularity and contextual scope. Inputs range from packet bytes and header sequences to aggregate flow statistics and learned embeddings. Most systems assign labels independently to individual packets or flows; comparatively fewer studies represent temporal or relational dependencies across several flows.
+
+\section{Signature-Based and Statistical Flow-Based Detection}
+\label{subsec:rw_signature_flow}
+
+Expert-authored rules are the basis of signature-driven NIDSs. Snort introduced a lightweight, extensible design for real-time packet inspection \cite{Roesch1999}; Suricata extends this operational model with multi-threaded processing and programmable logging \cite{SuricataGuide2026}. Their alerts are interpretable and rule behaviour can be controlled, which preserves their operational relevance. Coverage, however, depends on maintaining an appropriate signature set, and new or behaviourally altered attacks may fall outside it. Sommer and Paxson place this limitation in a broader methodological context: learning-based NIDS research must account for both the open-world nature of traffic and the semantic distance between laboratory benchmarks and deployed networks \cite{SommerPaxson2010}.
+
+Classical machine-learning pipelines usually group packets into bidirectional flows and describe each flow through duration, volume, rate, TCP-flag, and inter-arrival summaries. Ahmed et al. and Buczak and Guven review the use of decision trees, support-vector machines, nearest-neighbour methods, clustering, and ensembles for anomaly and intrusion detection \cite{Ahmed2016Survey,BuczakGuven2016}; conventional models can also benefit from feature selection and hybrid classification \cite{Aljawarneh2018}. Aggregation converts a variable-length conversation into an efficient fixed-dimensional vector. That convenience entails a loss of process information: similar totals may arise from different packet orders, directional changes, burst structures, or temporal gaps. A model restricted to aggregate statistics cannot observe those generating dynamics directly.
+
+\section{Deep Learning for Packet and Flow Sequences}
+\label{subsec:rw_deep_sequences}
+
+Deep architectures learn non-linear traffic representations and thereby reduce reliance on manually selected feature combinations. Recurrent NIDSs maintain a hidden state over ordered observations; Yin et al., for example, demonstrated that recurrent neural networks can capture sequential dependencies in intrusion data \cite{Yin2017RNNIDS}. Shone et al. paired a non-symmetric deep autoencoder with a supervised classifier to derive compact representations \cite{Shone2018NNAE}. Kitsune pursued lightweight online anomaly detection through an ensemble of incrementally processed autoencoders \cite{Mirsky2018Kitsune}. Local pattern extraction and recurrent temporal modelling have also been combined in CNN--LSTM hybrids \cite{Ullah2024IDSINT}.
+
+Architecture alone does not determine whether temporal structure is learned; the construction of the sequence is equally important. An LSTM or GRU is sometimes applied across the dimensions of one flow vector, so the resulting ``sequence'' represents feature order rather than chronological packets or flows. Feature interactions may be learned in this setting, but network time is not necessarily represented. NetSentry adopts a more direct temporal formulation by processing ordered observations for early detection of large-scale attacks \cite{LiuPatras2022NetSentry}. Its findings support the value of temporal correlation beyond independent record classification. Recurrent computation nevertheless proceeds sequentially, and compressing a long or irregularly sampled history into one final state can create an information bottleneck.
+
+\section{Transformer-Based Traffic Representation}
+\label{subsec:rw_transformers}
+
+By replacing recurrent transitions with self-attention, Transformers permit direct interaction between distant tokens and support parallel training \cite{Vaswani2017}. Both properties are relevant when evidence is separated by numerous packets or flows. RTIDS applied this mechanism to robust intrusion classification on flow-oriented benchmarks \cite{Wu2022RTIDS}. An encoder-based Transformer was later examined for cloud network intrusion detection by Long et al. \cite{Long2024TransformerNIDS}, whereas IDS-INT combined Transformer transfer learning, imbalance handling, and downstream neural components \cite{Ullah2024IDSINT}.
+
+GTID combines packet- and session-level features in a time-aware Transformer whose temporal coordinate is derived from inter-packet intervals rather than ordinal position alone \cite{Han2023GTID}. FlowTransformer takes a complementary, modular approach, enabling input encodings, Transformer blocks, classification heads, parameter counts, and runtime to be examined on flow-based NIDS datasets \cite{Manocchio2024FlowTransformer}. The memory flow Transformer extends attention to longer flow histories and complex relations in large sequential inputs \cite{Jiang2025MFT}. Together, these studies show that dependencies lost in a single aggregate vector can be recovered by attention-based models. They also make clear that encoding, pooling, sequence definition, and computational cost are at least as consequential as the choice of model family.
+
+Three unresolved distinctions motivate the present hierarchy. Ordinal adjacency does not reveal whether two packets are separated by microseconds or seconds. Packet sequences and aggregate statistics also describe different properties of the same connection. Finally, even a rich representation of one flow cannot establish on its own whether that flow belongs to a distributed host-level pattern. The proposed design treats these as separate representational requirements.
+
+\section{Self-Supervised and Encrypted-Traffic Representation Learning}
+\label{subsec:rw_ssl_encrypted}
+
+As encryption restricts payload inspection, traffic analysis has increasingly turned to packet sizes, directions, timing, header metadata, and learned latent representations. Surveys of encrypted-traffic analysis document this change and the expanding role of deep pre-training \cite{Sharma2025EncryptedSurvey,Dong2025EncryptedPretrain}. ET-BERT transfers bidirectional Transformer pre-training to contextualised datagram representations for encrypted-traffic classification \cite{Lin2022ETBERT}. Masked autoencoders learn from unlabelled records by reconstructing concealed parts of an input \cite{Zhao2024MAETraffic,2024MAETraffic}, while contrastive objectives improve label efficiency by aligning compatible traffic views and separating incompatible ones \cite{Li2024Contrastive}.
+
+Recent work has also widened the range of admissible representations. CoTNeT applies contextual Transformer processing to encrypted-traffic features \cite{Huang2024CoTNet}; DoLLM reformulates flow records for large-language-model-based DDoS detection \cite{Li2024DoLLM}. Both illustrate that plaintext payloads are not a prerequisite for useful representation learning. Nevertheless, encrypted-traffic classification should not be conflated with intrusion detection. An application's identity can remain stable even when malicious behaviour is sparse, evolving, or distributed over several connections.
+
+\section{Temporal, Relational, and Cross-Flow Context}
+\label{subsec:rw_cross_flow}
+
+Conditional independence between flows is a convenient assumption for batching and online inference, but many attack processes violate it. Scanning, password guessing, command and control, DDoS, and lateral movement may each generate a collection of individually ambiguous flows whose shared source, destination, endpoint, or temporal pattern is informative. NetSentry demonstrates the value of preserving observation order \cite{LiuPatras2022NetSentry}. Graph-based NIDSs instead encode host and flow relations explicitly: Deng et al. use graph convolution over flow topology for label-limited IoT detection \cite{Deng2023FlowTopology}, and Xu et al. combine graph neural networks with self-supervised learning for network-flow intrusion detection \cite{Xu2024SSLGNN}. Zhong et al. survey this expanding area and emphasise the capacity of graph models to represent structural dependence \cite{Zhong2024GNNSurvey}.
+
+Relational inductive bias is expressive, although maintaining a large communication graph can increase memory demand, latency, and deployment complexity. Window-based sequences occupy a different point in this design space. One recent Transformer groups IoT flows into temporal windows and represents every flow as a token, allowing inter-flow dependence to be learned through self-attention \cite{MartinReizabal2026FlowWindow}. A review of contextualised NetFlow NIDSs further distinguishes temporal, relational, multimodal, and multi-resolution context, and stresses that causal ordering and split isolation must be preserved during evaluation \cite{ElMahdaouy2026ContextNetFlow}.
+
+The modelling scope of representative Transformer-based approaches is contrasted in Table~\ref{tab:rw_model_comparison}. Numerical ranking would be inappropriate because the underlying datasets, labels, preprocessing procedures, and evaluation protocols differ. In this comparison, \emph{explicit elapsed time} requires direct encoding of timestamps or inter-arrival intervals; ordinal position or temporal-window membership alone is not sufficient.
+
+\begin{table}[H]
+\centering
+\caption{Qualitative scope of representative Transformer-based traffic models.}
+\label{tab:rw_model_comparison}
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.20}
+
+\textbf{(a) Representation and temporal modelling}\par\smallskip
+\begin{tabularx}{\textwidth}{@{}
+    >{\raggedright\arraybackslash}p{2.80cm}
+    >{\raggedright\arraybackslash}X
+    >{\centering\arraybackslash}p{2.10cm}
+    >{\centering\arraybackslash}p{3.20cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Primary input} &
+\shortstack{\textbf{Packet}\\\textbf{order}} &
+\shortstack{\textbf{Elapsed}\\\textbf{time}} \\
+\midrule
+FlowTransformer \cite{Manocchio2024FlowTransformer} &
+Flow records and statistics & No & Not explicitly encoded \\
+GTID \cite{Han2023GTID} &
+Packet headers and payload n-grams within a session & Yes & Inter-packet intervals \\
+ET-BERT \cite{Lin2022ETBERT} &
+Datagram bytes grouped into BURSTs & Byte and BURST order & Order only; no packet intervals \\
+Flow-to-window Transformer \cite{MartinReizabal2026FlowWindow} &
+Flow records in fixed-duration windows & No & Window order; no packet intervals \\
+\textbf{Proposed} &
+Packet-header sequence and flow statistics & \textbf{Yes} & \textbf{Packet intervals} \\
+\bottomrule
+\end{tabularx}
+
+\vspace{0.8em}
+\textbf{(b) Context, payload use, and task}\par\smallskip
+\begin{tabularx}{\textwidth}{@{}
+    >{\raggedright\arraybackslash}p{2.80cm}
+    >{\raggedright\arraybackslash}X
+    >{\centering\arraybackslash}p{2.80cm}
+    >{\raggedright\arraybackslash}p{4.10cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Inter-flow context} &
+\textbf{Payload use} & \textbf{Primary task} \\
+\midrule
+FlowTransformer \cite{Manocchio2024FlowTransformer} &
+Ordered flow sequence & None & Flow-level NIDS \\
+GTID \cite{Han2023GTID} &
+None & Payload n-grams & NIDS \\
+ET-BERT \cite{Lin2022ETBERT} &
+None & Encrypted bytes & Encrypted-traffic classification \\
+Flow-to-window Transformer \cite{MartinReizabal2026FlowWindow} &
+Temporal window & None & IoT NIDS and traffic classification \\
+\textbf{Proposed} &
+\textbf{Time, source, destination, or endpoint} &
+\textbf{No payload content} & \textbf{Flow-level NIDS} \\
+\bottomrule
+\end{tabularx}
+
+\begin{minipage}{\textwidth}
+\vspace{2pt}
+\footnotesize
+\emph{Notes:} Entries describe the principal configuration reported in each study; extensible frameworks may support other variants. ``No payload content'' excludes direct payload bytes but not scalar metadata such as payload length.
+\end{minipage}
+\end{table}
+
+This qualitative contrast identifies a gap without treating results from incompatible experimental settings as directly rankable. FlowTransformer and the flow-to-window model capture dependencies among flow records but do not reconstruct the packet dynamics within a flow. GTID represents both packet order and inter-packet time, although it processes one session at a time and incorporates payload-derived n-grams. ET-BERT learns byte- and BURST-level representations from encrypted raw traffic, but is primarily designed for encrypted-traffic classification rather than cross-flow intrusion detection. Within the selected comparison, only the proposed framework combines payload-content-independent packet modelling, explicit elapsed time, flow-statistical conditioning, and configurable context across flows. These complementary requirements motivate the separation of Stage~1 from Stage~2.
+\section{Research Gap}
+\label{subsec:rw_gap}
+
+Aggregate flow statistics, sequential encoders, time-aware attention, self-supervised traffic representations, and graph- or window-based context have each proved useful. They are commonly investigated in isolation, however. Statistical flow models trade packet dynamics for efficiency; packet-sequence encoders generally stop at independent flow classification; and cross-flow models often begin with raw flow vectors rather than representations learned from timing-aware packet sequences.
+
+The proposed hierarchy assigns these two scales of evidence to different stages. Packet order and elapsed time are represented within Stage~1 and conditioned by flow statistics. Stage~2 operates on the resulting embeddings under explicit temporal and endpoint-based context policies. In this way, \emph{intra-flow} packet dynamics are connected to \emph{inter-flow} attack context without collapsing them into one input representation. Separate ablations then test the contribution of time-aware packet modelling and the additional value of contextual flow history.
+
+\providecommand{\datasetfield}[1]{\texttt{\detokenize{#1}}}
+
+
+\chapter{Dataset Construction and Preprocessing}
+\label{sec:dataset_preprocessing}
+
+Two synchronised views of the traffic are required: an ordered set of packet records for every flow and a single statistical record describing that flow. The raw CSV schema is kept distinct from the Stage~1 predictor set and from identifiers used only to construct Stage~2 context, since linkage metadata need not be suitable predictive variables. Alignment and sequence assembly are deterministic, whereas every transformation estimated from data is fitted on the training partition. This organisation supports reproducibility and limits information leakage during NIDS evaluation \cite{Shiravi2012DatasetGeneration,Ring2019Datasets,Goldschmidt2025Datasets,Pinto2025DatasetReview}.
+
+\section{Data Provenance and Scope}
+\label{subsec:data_provenance}
+
+Experiments are conducted on \datasetfield{ar002_et12_20260511_001.pcap}, an approximately $8.62\,\mathrm{GB}$ packet capture supplied by the company. Organisational staff acquired the trace from the company network with an internal traffic-collection tool; no laboratory traffic was generated for this thesis. CICIDS-style datasets schedule benign profiles and attacks under controlled conditions \cite{Sharafaldin2018CICIDS}. By contrast, the present trace records enterprise traffic as it was visible at the collection point. This improves environmental realism but also binds the observed traffic mix, host population, sensor visibility, and attack coverage to one organisation and capture period.
+
+Because the dataset is proprietary, it is not presented as a public benchmark. Sensitive network identifiers, notably IP addresses and ports, remain in the source PCAP and CSV files; only aggregate quantities are reported in the thesis. Before any artefact leaves the authorised environment, host identifiers should be replaced consistently, superfluous endpoint fields removed, and the result reviewed under company data-governance policy. Stage~2 relies on equality relations between hosts, so stable pseudonyms are preferable to removing every identifier, although the pseudonym map itself need not be disclosed. Raw addresses are still retained by the current extraction code in local metadata. Pseudonymisation is therefore a requirement for future release, not a property claimed for the current CSV files.
+
+\section{External Evaluation Datasets}
+\label{subsec:external_datasets}
+
+Two datasets that are disjoint from the source capture are used to examine transfer beyond its internal chronological test. The first is the publicly available CICIDS2017 Wednesday-workingHours capture, corresponding to Wednesday, 5 July 2017 \cite{Sharafaldin2018CICIDS}. CICIDS2017 is not company-provided traffic and is treated as a public cross-dataset test. Compatible Stage~1 external-test artefacts are ordered chronologically and divided into multiple non-overlapping windows of 20,000 flows. To preserve the qualitative class-imbalance condition of the source task, external windows are retained when label~1 remains the minority class and label~0 the majority class. Under this prevalence-based criterion, the evaluated windows are \texttt{w01}, \texttt{w02}, \texttt{w06}, \texttt{w07}, and \texttt{w08}, contributing 100,000 flows in total. The criterion concerns class composition rather than model performance. Window-level reporting is retained because aggregate performance alone can conceal temporal variation in false-positive and false-negative behaviour.
+
+The second external dataset, \datasetfield{firewall_test_20250731_160700}, was supplied by the company but collected from a server environment different from that of \datasetfield{ar002_et12_20260511_001}. It contains 38,513 evaluated flows and is used as a cross-server organisational test. It is neither part of CICIDS2017 nor described as a public benchmark. This distinction separates public cross-dataset transfer from transfer to a different server within the organisational setting.
+
+The external datasets are evaluation resources rather than extensions of the source training partition. Their class prevalence differs from that of the source capture: the five prevalence-compatible CICIDS2017 windows contain between 13.34\% and 18.20\% positive flows, whereas the separate-server capture contains 3.285\%. Metrics are consequently interpreted within each dataset rather than through accuracy alone. Selecting CICIDS2017 windows in which label~1 remains the minority improves comparability with the imbalanced source task, but it also limits the external claim to windows satisfying that condition rather than the complete Wednesday capture. Differences in capture environment, traffic composition, labelling provenance, and class balance mean that an external score is evidence of transfer under the evaluated pipeline, not proof of invariant performance across arbitrary networks.
+
+\section{PCAP-to-CSV Extraction}
+\label{subsec:pcap_extraction}
+
+Suricata, an open-source network threat detection engine, is used to replay the PCAP \cite{Roesch1999,SuricataGuide2026}. The custom C module at \datasetfield{suricata-plugin/custom-out.c} registers separate packet and flow loggers through Suricata's low-level output interfaces. Both CSV views are emitted during the same pass. Consequently, packet-to-flow membership does not need to be reconstructed by another tool, and the packet and flow tables retain a common bidirectional \datasetfield{flow_id}.
+
+The construction path is shown in Figure~\ref{fig:data_construction_pipeline}. Packet rows retain microsecond timestamps and their order within each flow. In parallel, online aggregates are maintained by the flow logger and written once a flow completes. Broad feature families follow CICFlowMeter/CICIDS-style data, with additional indicators recording whether initial TCP-window measurements are available in the forward and backward directions
+\cite{Sharafaldin2018CICIDS}.
+
+\begin{figure}[H]
+    \centering
+    \begin{tikzpicture}[
+        node distance=7mm and 8mm,
+        block/.style={draw, rectangle, rounded corners=2pt, align=center,
+                      minimum height=9mm, text width=29mm, font=\small},
+        smallblock/.style={draw, rectangle, rounded corners=2pt, align=center,
+                           minimum height=9mm, text width=27mm, font=\small},
+        arrow/.style={-{Latex[length=2mm]}, thick}
+    ]
+        \node[block] (pcap) {Enterprise PCAP\\$8.62\,\mathrm{GB}$};
+        \node[block, right=of pcap] (suricata) {Suricata + custom\\output plugin};
+        \node[smallblock, above right=5mm and 9mm of suricata] (packet) {Packet CSV\\$11{,}750{,}727\times40$};
+        \node[smallblock, below right=5mm and 9mm of suricata] (flow) {Flow CSV\\$421{,}898\times77$};
+        \node[block, right=9mm of packet] (align) {Integrity checks and\\\datasetfield{flow_id} alignment};
+        \node[block, below=of align] (split) {Chronological\\flow-level split};
+        \node[block, below=of split] (tensor) {Train-fitted transforms\\and model tensors};
+
+        \draw[arrow] (pcap) -- (suricata);
+        \draw[arrow] (suricata) -- (packet);
+        \draw[arrow] (suricata) -- (flow);
+        \draw[arrow] (packet) -- (align);
+        \draw[arrow] (flow) -- (align);
+        \draw[arrow] (align) -- (split);
+        \draw[arrow] (split) -- (tensor);
+    \end{tikzpicture}
+    \caption{Construction and preprocessing path from the proprietary PCAP to
+    Stage~1 tensors and Stage~2 metadata.}
+    \label{fig:data_construction_pipeline}
+\end{figure}
+
+Neither learning stage receives raw application payload bytes. Although \datasetfield{payload_len} is present, it records only a scalar length derived from packet metadata and contains no application content. The detector is therefore independent of payload content, but not of every payload-related measurement. Suricata signatures, rule identifiers, alert text, and alert counts are likewise excluded from the predictor set.
+
+\section{Alert-Derived Label Construction}
+\label{subsec:label_construction}
+
+Binary targets are derived by the custom logger from Suricata's alert state. If $a(p_i)$ is the number of alerts associated with packet $p_i$, its packet-level target is
+\begin{equation}
+    y_i^{\mathrm{pkt}}
+    = \mathbb{I}\!\left[a(p_i)>0\right],
+    \label{eq:packet_alert_label}
+\end{equation}
+where $\mathbb{I}[\cdot]$ denotes the indicator function. A positive flow contains at least one packet that triggered an alert:
+\begin{equation}
+    y_f
+    = \max_{p_i\in\mathcal{P}_f} y_i^{\mathrm{pkt}},
+    \label{eq:flow_alert_label}
+\end{equation}
+Here, $\mathcal{P}_f$ contains all packets assigned to flow $f$. Accordingly, \datasetfield{packet_label}=1 identifies an alert-triggering packet, whereas \datasetfield{label}=1 marks an alert-associated flow.
+
+These programmatically assigned targets are \emph{weak labels}, not ground truth verified independently by experts \cite{Ratner2017Snorkel}. Label~0 signifies only that the configured Suricata rules emitted no alert; benignity is not thereby established. Positive targets similarly inherit false alarms from the deployed ruleset. The reported experiments thus evaluate the learning and contextualisation of behaviour associated with Suricata alerts, not guaranteed coverage of every intrusion or zero-day attack. Errors in the labelling process may influence both model fitting and test estimates and must be considered when the findings are interpreted \cite{Northcutt2021ConfidentLearning}.
+
+Direct target leakage is prevented by excluding \datasetfield{packet_label}, \datasetfield{label}, and all Suricata alert metadata from model inputs. Exact replication of the weak-labelling function would additionally depend on the Suricata version, a ruleset snapshot, the custom-module revision, its configuration, and the PCAP checksum. Where this provenance was not retained, the omission is reported in Chapter~\ref{sec:experimental_methodology} rather than filled retrospectively.
+
+\section{Raw Dataset Composition}
+\label{subsec:raw_composition}
+
+Table~\ref{tab:raw_dataset_summary} reports the dimensions of the aligned outputs. There are $11{,}750{,}727$ packet rows across 40 columns and $421{,}898$ flow rows across 77 columns. Before truncation, their count ratio is approximately $27.85$ logged packets per flow. This mean should not be read as evidence of uniform flow length: packet counts are typically heavy-tailed, making an explicit upper bound on sequence length necessary.
+
+\begin{table}[H]
+    \centering
+    \caption{Raw extracted dataset summary.}
+    \label{tab:raw_dataset_summary}
+    \begin{tabular}{@{}lrrp{5.7cm}@{}}
+        \toprule
+        Data view & Rows & Columns & Primary role \\
+        \midrule
+        Packet CSV & 11,750,727 & 40 & Ordered packet-header, protocol, direction, and inter-arrival observations within flows \\
+        Flow CSV & 421,898 & 77 & One flow-level target, aggregate statistics, and context-construction metadata per flow \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Among the $421{,}898$ flow records, $405{,}254$ carry label~0 and $16{,}644$ carry label~1, as detailed in Table~\ref{tab:flow_label_distribution}. Hence, the positive prevalence and class-imbalance ratio are
+\begin{align}
+    \pi_1 &= \frac{16{,}644}{421{,}898} = 0.03945
+             \quad (3.945\%), \\
+    \mathrm{IR} &= \frac{405{,}254}{16{,}644} = 24.35:1.
+    \label{eq:dataset_imbalance}
+\end{align}
+
+\begin{table}[H]
+    \centering
+    \caption{Flow-level alert-derived label distribution.}
+    \label{tab:flow_label_distribution}
+    \begin{tabular}{@{}llrr@{}}
+        \toprule
+        Label & Interpretation & Count & Proportion \\
+        \midrule
+        0 & No Suricata alert observed in the flow & 405,254 & 96.055\% \\
+        1 & At least one alert-triggering packet & 16,644 & 3.945\% \\
+        \midrule
+        Total & & 421,898 & 100.000\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+At this prevalence, predicting label~0 for every flow would yield approximately $96.055\%$ accuracy and zero positive recall. Accuracy and frequency-weighted averages are therefore treated as secondary. Macro-precision, macro-recall, macro-F1, ROC-AUC, PR-AUC, confusion-matrix counts, and false-positive rate provide the main evidence. PR-AUC is especially informative for a rare positive class \cite{SaitoRehmsmeier2015}. Operationally, false positives also warrant direct attention because even a small fraction of $405{,}254$ negative flows can translate into a large number of alerts.
+
+\section{Raw Packet and Flow Schemas}
+\label{subsec:raw_schemas}
+
+All raw columns are grouped by function in Tables~\ref{tab:packet_schema} and~\ref{tab:flow_schema}. These groups describe the extracted schema and should not be interpreted as the final predictor set.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}
+                         >{\raggedright\arraybackslash}p{0.75\textwidth}@{}}
+    \caption{Complete packet CSV schema grouped by function.}
+    \label{tab:packet_schema} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+    Record identity and time &
+    \datasetfield{record_type}, \datasetfield{packet_id},
+    \datasetfield{timestamp_us}, \datasetfield{ts_sec},
+    \datasetfield{ts_usec}, \datasetfield{flow_id} \\
+    Endpoints and protocol &
+    \datasetfield{direction}, \datasetfield{ip_version},
+    \datasetfield{src_ip}, \datasetfield{dst_ip},
+    \datasetfield{src_port}, \datasetfield{dst_port},
+    \datasetfield{protocol}, \datasetfield{l7_proto} \\
+    Length and header metadata &
+    \datasetfield{pkt_len}, \datasetfield{ip_len},
+    \datasetfield{payload_len}, \datasetfield{ttl_or_hop_limit},
+    \datasetfield{tcp_window}, \datasetfield{tcp_header_len},
+    \datasetfield{udp_len} \\
+    Transport indicators &
+    \datasetfield{has_tcp}, \datasetfield{has_udp},
+    \datasetfield{has_icmp} \\
+    TCP state and flags &
+    \datasetfield{tcp_seq}, \datasetfield{tcp_ack},
+    \datasetfield{tcp_flags}, \datasetfield{tcp_fin},
+    \datasetfield{tcp_syn}, \datasetfield{tcp_rst},
+    \datasetfield{tcp_psh}, \datasetfield{tcp_ack_flag},
+    \datasetfield{tcp_urg}, \datasetfield{tcp_ece},
+    \datasetfield{tcp_cwr} \\
+    ICMP metadata &
+    \datasetfield{icmp_type}, \datasetfield{icmp_code} \\
+    Inter-arrival time &
+    \datasetfield{flow_iat_us}, \datasetfield{direction_iat_us} \\
+    Target &
+    \datasetfield{packet_label} \\
+\end{longtable}
+
+The two packet-level timing fields are not interchangeable. \datasetfield{flow_iat_us} measures elapsed time since the preceding packet in the bidirectional flow; \datasetfield{direction_iat_us} refers instead to the preceding packet travelling in the same direction. Values are expressed in microseconds and set to zero when no applicable predecessor exists.
+
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.20\textwidth}
+                         >{\raggedright\arraybackslash}p{0.75\textwidth}@{}}
+    \caption{Complete flow CSV schema grouped by function.}
+    \label{tab:flow_schema} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endfirsthead
+    \multicolumn{2}{c}{\tablename\ \thetable\ -- continued from previous page} \\
+    \toprule
+    Group & Raw columns \\
+    \midrule
+    \endhead
+    \midrule
+    \multicolumn{2}{r}{Continued on next page} \\
+    \endfoot
+    \bottomrule
+    \endlastfoot
+    Identity and time &
+    \datasetfield{flow_id}, \datasetfield{flow_start_timestamp_us},
+    \datasetfield{flow_end_timestamp_us} \\
+    Endpoints and protocol &
+    \datasetfield{source_ip}, \datasetfield{source_port},
+    \datasetfield{destination_ip}, \datasetfield{destination_port},
+    \datasetfield{protocol} \\
+    Directional volume &
+    \datasetfield{total_fwd_packets}, \datasetfield{total_backward_packets},
+    \datasetfield{total_length_of_fwd_packets},
+    \datasetfield{total_length_of_bwd_packets} \\
+    Directional length statistics &
+    \datasetfield{fwd_packet_length_max},
+    \datasetfield{fwd_packet_length_min},
+    \datasetfield{fwd_packet_length_mean},
+    \datasetfield{fwd_packet_length_std},
+    \datasetfield{bwd_packet_length_max},
+    \datasetfield{bwd_packet_length_min},
+    \datasetfield{bwd_packet_length_mean},
+    \datasetfield{bwd_packet_length_std} \\
+    Overall rate and timing &
+    \datasetfield{flow_duration}, \datasetfield{flow_bytes_per_s},
+    \datasetfield{flow_packets_per_s}, \datasetfield{flow_iat_mean},
+    \datasetfield{flow_iat_std}, \datasetfield{flow_iat_max},
+    \datasetfield{flow_iat_min} \\
+    Directional inter-arrival time &
+    \datasetfield{fwd_iat_total}, \datasetfield{fwd_iat_mean},
+    \datasetfield{fwd_iat_std}, \datasetfield{fwd_iat_max},
+    \datasetfield{fwd_iat_min}, \datasetfield{bwd_iat_total},
+    \datasetfield{bwd_iat_mean}, \datasetfield{bwd_iat_std},
+    \datasetfield{bwd_iat_max}, \datasetfield{bwd_iat_min} \\
+    Directional flags, headers, and rates &
+    \datasetfield{fwd_psh_flags}, \datasetfield{bwd_psh_flags},
+    \datasetfield{fwd_urg_flags}, \datasetfield{bwd_urg_flags},
+    \datasetfield{fwd_header_length}, \datasetfield{bwd_header_length},
+    \datasetfield{fwd_packets_per_s}, \datasetfield{bwd_packets_per_s} \\
+    Overall packet-length distribution &
+    \datasetfield{min_packet_length}, \datasetfield{max_packet_length},
+    \datasetfield{packet_length_mean}, \datasetfield{packet_length_std},
+    \datasetfield{packet_length_variance} \\
+    TCP flag counts &
+    \datasetfield{fin_flag_count}, \datasetfield{syn_flag_count},
+    \datasetfield{rst_flag_count}, \datasetfield{psh_flag_count},
+    \datasetfield{ack_flag_count}, \datasetfield{urg_flag_count},
+    \datasetfield{cwe_flag_count}, \datasetfield{ece_flag_count} \\
+    Ratios, segments, and initial windows &
+    \datasetfield{down_up_ratio}, \datasetfield{average_packet_size},
+    \datasetfield{avg_fwd_segment_size},
+    \datasetfield{avg_bwd_segment_size},
+    \datasetfield{has_init_win_bytes_forward},
+    \datasetfield{init_win_bytes_forward},
+    \datasetfield{has_init_win_bytes_backward},
+    \datasetfield{init_win_bytes_backward},
+    \datasetfield{act_data_pkt_fwd}, \datasetfield{min_seg_size_forward} \\
+    Active and idle periods &
+    \datasetfield{active_mean}, \datasetfield{active_std},
+    \datasetfield{active_max}, \datasetfield{active_min},
+    \datasetfield{idle_mean}, \datasetfield{idle_std},
+    \datasetfield{idle_max}, \datasetfield{idle_min} \\
+    Target & \datasetfield{label} \\
+\end{longtable}
+
+TCP-specific fields are zero-filled for non-TCP packets, with \datasetfield{has_tcp} distinguishing an inapplicable field from a genuine observed zero. UDP and ICMP presence indicators serve the same purpose. At flow level, \datasetfield{has_init_win_bytes_forward} and \datasetfield{has_init_win_bytes_backward} mark the availability of their corresponding initial-window measurements; a missing measurement is stored as zero.
+
+\section{Integrity Checks and Packet--Flow Alignment}
+\label{subsec:data_integrity}
+
+Preprocessing begins by normalising column names and discarding \datasetfield{record_type}, a logging descriptor with no predictive role. Infinite values are converted to missing entries. Rows are rejected when \datasetfield{flow_id} is zero or missing; valid flow rows also require \datasetfield{flow_start_timestamp_us}, while packet rows require \datasetfield{timestamp_us}, in each case with a nonzero, nonmissing value.
+
+Only one effective flow row is retained for each \datasetfield{flow_id}. When duplicates occur, a stable sort by identifier and start time is applied, the first record is kept, and the number of discarded duplicates is logged. The identifier sets of the packet and flow tables are then intersected so that unmatched rows can be removed from both views. A final sort places packets in \datasetfield{flow_id} and \datasetfield{timestamp_us} order. Together, these operations establish the one-to-many relation
+\begin{equation}
+    f \longleftrightarrow
+    \left\{p_{f,1},p_{f,2},\ldots,p_{f,n_f}\right\},
+    \qquad
+    t_{f,1}\leq t_{f,2}\leq\cdots\leq t_{f,n_f},
+    \label{eq:packet_flow_alignment}
+\end{equation}
+before splitting or feature transformation. Table~\ref{tab:raw_dataset_summary} describes the CSV files as extracted, whereas post-cleaning counts for a particular run are determined from its saved split report.
+
+\section{Feature Selection and Leakage Control}
+\label{subsec:feature_selection}
+
+Raw columns are not passed wholesale to the network; the input schema is controlled by configuration. Before one-hot expansion, the principal Stage~1 setup uses the 23 packet predictors listed in Table~\ref{tab:stage1_packet_features}. Numerical variables encode packet and header dimensions, categorical variables describe protocol state, and binary indicators retain direction, transport presence, and individual TCP flags.
+
+\begin{table}[H]
+    \centering
+    \caption{Packet predictors used by the principal Stage~1 configuration.}
+    \label{tab:stage1_packet_features}
+    \small
+    \begin{tabular}{@{}p{2.5cm}p{11.4cm}@{}}
+        \toprule
+        Type & Selected raw columns \\
+        \midrule
+        Numerical (7) &
+        \datasetfield{pkt_len}, \datasetfield{ip_len},
+        \datasetfield{payload_len}, \datasetfield{ttl_or_hop_limit},
+        \datasetfield{tcp_window}, \datasetfield{tcp_header_len},
+        \datasetfield{udp_len} \\
+        Categorical (4) &
+        \datasetfield{ip_version}, \datasetfield{protocol},
+        \datasetfield{icmp_type}, \datasetfield{icmp_code} \\
+        Binary (12) &
+        \datasetfield{direction}, \datasetfield{has_tcp},
+        \datasetfield{has_udp}, \datasetfield{has_icmp},
+        \datasetfield{tcp_fin}, \datasetfield{tcp_syn},
+        \datasetfield{tcp_rst}, \datasetfield{tcp_psh},
+        \datasetfield{tcp_ack_flag}, \datasetfield{tcp_urg},
+        \datasetfield{tcp_ece}, \datasetfield{tcp_cwr} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Stage~1 excludes raw IP addresses and ports, packet and flow identifiers, absolute timestamps, TCP sequence and acknowledgement numbers, the combined TCP-flag integer, \datasetfield{l7_proto}, and both targets. Their removal discourages memorisation of site-specific endpoints and prevents identifiers or capture position from becoming target shortcuts. Relative timing is retained separately through a tensor derived from \datasetfield{flow_iat_us}; the absolute packet timestamp is not supplied as an ordinary feature.
+
+When statistical fusion is enabled, a configured subset of Table~\ref{tab:flow_schema} is processed through a separate branch. The principal subset covers duration, directional packet and byte totals, length distributions, rates, inter-arrival summaries, flag counts, header lengths, segment and window measurements, and selected active-period statistics. Availability of the two initial-window measurements is represented by binary indicators. Endpoint identities and ports, absolute flow times, and \datasetfield{label} are omitted. Since the packet-only ablation disables this branch, presence in the raw schema does not imply use in every experiment.
+
+Three metadata fields accompany every Stage~1 embedding: \datasetfield{flow_start_timestamp_us}, \datasetfield{source_ip}, and \datasetfield{destination_ip}. They define relations for Stage~2 and are not Stage~1 predictors. Host equality determines source-host, destination-host, and endpoint contexts, while start time establishes ordering. Addresses are never one-hot encoded as semantic features, and historical labels are not retrieved into context. The required relations are thereby preserved without directly training on host identity.
+
+A field-level specification of the complete raw packet and flow schemas, including implementation meaning and measurement units before transformation, is provided in Appendix~\ref{app:feature_specification}.
+
+\section{Train-Fitted Feature Transformations}
+\label{subsec:feature_transformations}
+
+Every data-dependent transformation is estimated from the training partition and subsequently applied unchanged to validation and test records. Estimating clipping limits, scaling statistics, or category vocabularies from the complete dataset would expose information from later partitions \cite{Arp2022DosDonts}. Packet and flow variables follow pipelines of the same form, but their fitted parameters remain separate.
+
+\paragraph{Numerical features.}
+After conversion to numeric form, non-finite entries are marked as missing. Selected nonnegative variables with heavy-tailed distributions undergo the transform
+\begin{equation}
+    \widetilde{x}=\log(1+\max(x,0)).
+    \label{eq:log1p_preprocessing}
+\end{equation}
+Configured variables include packet and payload lengths, TCP window, header length, UDP length, and numerous flow-level counts, durations, byte totals, rates, and inter-arrival summaries. Zero imputation is applied after the logarithmic transform.
+
+For numerical variable $j$, lower and upper clipping limits are the training quantiles $q_{0.001,j}^{\mathrm{tr}}$ and $q_{0.999,j}^{\mathrm{tr}}$. Winsorisation in every partition is defined by
+\begin{equation}
+    x_{ij}^{\mathrm{clip}}
+    = \min\!\left(
+        \max\!\left(\widetilde{x}_{ij},q_{0.001,j}^{\mathrm{tr}}\right),
+        q_{0.999,j}^{\mathrm{tr}}
+      \right).
+    \label{eq:quantile_clipping}
+\end{equation}
+Robust scaling is then applied in the principal configuration:
+\begin{equation}
+    x_{ij}^{\mathrm{scaled}}
+    = \frac{x_{ij}^{\mathrm{clip}}-
+             \operatorname{median}_{\mathrm{tr}}(x_j)}
+            {\operatorname{IQR}_{\mathrm{tr}}(x_j)},
+    \label{eq:robust_scaling}
+\end{equation}
+where the denominator is computed from the training interquartile range. Logarithmic compression, quantile clipping, and robust scaling limit the influence of extreme bursts without drawing statistics from the test partition.
+
+\paragraph{Categorical features.}
+An explicit \datasetfield{MISSING} token represents absent categorical values. The one-hot vocabulary is learned from training categories; categories encountered only during validation or testing are ignored, leaving the input dimension unchanged.
+
+\paragraph{Binary features.}
+Binary fields are first converted to numbers. Missing and non-finite entries become zero, as do all non-positive values, while positive entries become one. No one-hot encoding, logarithmic transform, clipping, or scaling is applied to these indicators.
+
+\section{Packet-Sequence Construction}
+\label{subsec:sequence_construction}
+
+Packets in aligned flow $f$ are sorted by \datasetfield{timestamp_us}. Under the principal \datasetfield{head} policy, at most $L=128$ packets are retained. Flows longer than $L$ contribute their first 128 observations; shorter sequences are padded with zeros on the right. Valid positions are recorded in a Boolean mask so that padding is excluded from attention and pooling. The resulting tensor shapes are
+\begin{equation}
+    \mathbf{X}\in\mathbb{R}^{N\times L\times d_p},\qquad
+    \mathbf{T}\in\mathbb{R}^{N\times L},\qquad
+    \mathbf{M}\in\{0,1\}^{N\times L},
+    \label{eq:stage1_tensor_shapes}
+\end{equation}
+with $d_p$ denoting the transformed packet-feature dimension after one-hot encoding.
+
+Nonnegative within-flow inter-arrival times define the timing tensor:
+\begin{equation}
+    T_{f,i}=\log\!\left(1+\max(\Delta t_{f,i},0)\right),
+    \qquad
+    \Delta t_{f,i}=\datasetfield{flow_iat_us}(p_{f,i}).
+    \label{eq:time_tensor}
+\end{equation}
+This tensor enters the time-aware encoder separately; absolute timestamps are not concatenated to the packet features.
+
+Two additional policies support the truncation ablation. \datasetfield{head_tail} combines the first $\lfloor L/2\rfloor$ packets with the final $L-\lfloor L/2\rfloor$ packets. \datasetfield{random} samples $L$ positions without replacement from a deterministic seed derived from \datasetfield{flow_id} and the global seed, after which the selected packets are returned to chronological order. Separate experiments consider $L\in\{8,16,32,64,128,256\}$. Only the retained evidence and associated computation change; flow membership in each split remains fixed.
+
+\section{Chronological Train--Validation--Test Partition}
+\label{subsec:chronological_partition}
+
+Unique flows are stably ordered by \datasetfield{flow_start_timestamp_us} before a flow-level split is made. The earliest 70\% form the training partition, the following 10\% form validation, and the final 20\% are reserved for testing. With \datasetfield{stratify=false}, these chronological boundaries are not adjusted to equalise class proportions. For the $421{,}898$ aligned records, this procedure yields the partition sizes in Table~\ref{tab:chronological_split}.
+
+\begin{table}[H]
+    \centering
+    \caption{Principal chronological flow partition.}
+    \label{tab:chronological_split}
+    \begin{tabular}{@{}lrrl@{}}
+        \toprule
+        Partition & Ratio & Number of flows & Temporal role \\
+        \midrule
+        Training & 70\% & 295,329 & Earliest flows \\
+        Validation & 10\% & 42,189 & Intermediate flows \\
+        Test & 20\% & 84,380 & Latest flows \\
+        \midrule
+        Total & 100\% & 421,898 & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Every packet follows the partition assignment of its parent \datasetfield{flow_id}; no flow can span two partitions. Only training-flow packets and statistics are used to fit preprocessing. Validation data support hyperparameter choice, early stopping, and decision-threshold selection, while final evaluation is confined to the test partition. Relative to random row splitting, chronological separation more closely reflects deployment on later traffic and reduces leakage from distributing related packets or temporally adjacent behaviour across partitions \cite{SommerPaxson2010,Arp2022DosDonts}.
+
+\section{Stage~1 Artifacts Supplied to Stage~2}
+\label{subsec:stage2_artifacts}
+
+Once Stage~1 has been trained, exactly one embedding and one metadata record are exported for each flow in every partition. Metadata comprise \datasetfield{flow_id}, the target, partition name, \datasetfield{flow_start_timestamp_us}, and source and destination identifiers. The embedding provides Stage~2 content; time and host identity are used only to determine which earlier flows are eligible. Retaining the partition name guards against unintended context construction across split boundaries. Targets remain available for training and evaluation but never become context features.
+
+Each Stage~1 run also records the selected features, encoder categories, clipping limits, scaling parameters, sequence policy, random seed, ordered flow identifiers, partition-level class counts, model configuration, and checkpoint identity. These records link every Stage~2 result to the Stage~1 checkpoint and split manifest from which its embeddings originated.
+
+\section{Validity, Privacy, and Reproducibility Considerations}
+\label{subsec:dataset_limitations}
+
+Although the resulting dataset supports evaluation on a large, temporally ordered enterprise trace, four constraints delimit the conclusions.
+
+\begin{enumerate}[label=\textbf{L\arabic*:},leftmargin=*]
+    \item \textbf{Alert-derived ground truth.} Label coverage and error reflect a single Suricata ruleset. A negative record is therefore more accurately interpreted as ``no alert observed'' than as independently verified benign traffic.
+
+    \item \textbf{Limited multi-source scope.} Model development and ablation evidence comes from one company source capture. The public CICIDS2017 windows and separate-server company capture extend evaluation beyond that source, but two external sources cannot establish generalisation across arbitrary organisations, sensors, rulesets, or extended periods.
+
+    \item \textbf{Capture visibility.} Only traffic observable at the collection point appears in the PCAP. Packet loss, asymmetric routing, encryption, and incomplete flows may change the extracted measurements. Where organisational policy allows, documentation should include the collection tool, interface location, capture interval, packet-loss report, and snap length.
+
+    \item \textbf{Sensitive identifiers.} Stage~2 relations are currently formed from addresses retained in local metadata. Those addresses must be excluded from the thesis, shared CSVs, screenshots, and public metadata. Any released artefact requires stable pseudonymisation verified to preserve equality-based context membership.
+\end{enumerate}
+
+Within these limits, the study evaluates a traceable learning pipeline on a large proprietary capture with weak labels. Suricata outputs are not treated as perfect attack truth, the presence of every zero-day behaviour is not assumed, and no claim is made that performance transfers unchanged to other enterprise networks. Tensors, masks, flow measurements, and causal-context metadata together define the interface passed between the two model stages.
+
+\providecommand{\methodfield}[1]{\texttt{\detokenize{#1}}}
+
+\chapter{Proposed Methodology}
+\label{sec:proposed_methodology}
+
+Two complementary scales of traffic structure are represented by the detector. Stage~1 operates within a bidirectional flow, combining its ordered packets with statistical properties. Stage~2 relates the target flow to eligible historical flows. Sequential training and a fixed-dimensional Stage~1 interface keep intra-flow representation learning distinct from contextual reasoning across flows.
+
+Although the architecture is derived from the Transformer \cite{Vaswani2017}, self-attention alone does not define the method. Three mechanisms are combined: (i) a cumulative-time coordinate that represents irregular packet arrival, (ii) an independently encoded statistical branch that modulates packet tokens within a bounded range, and (iii) causal target-query attention from the current flow to historical flows only. The distinction between packet order and elapsed time follows evidence from time-aware NIDS research \cite{Han2023GTID}. Separating within-flow evidence from cross-flow behaviour also addresses attacks whose signal is dispersed over several connections and may be missed when flows are classified independently
+\cite{LiuPatras2022NetSentry,Manocchio2024FlowTransformer, MartinReizabal2026FlowWindow}.
+
+The high-level data path appears in Figure~\ref{fig:overall_framework}. A time-aware intra-flow Transformer converts packet records into one embedding for each flow. A sequence of these embeddings is then contextualised in Stage~2 to produce a binary decision for the target flow. Figure~\ref{fig:method_architecture} gives a more detailed view of statistical conditioning and target-query attention.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{MScCS/overallFramework.png}
+    \caption{High-level architecture of the hierarchical detector. Stage~1 transforms a packet sequence into an intra-flow representation, and Stage~2 contextualises the resulting flow sequence before classifying the target flow.}
+    \label{fig:overall_framework}
+\end{figure}
+
+\section{Architectural Overview}
+\label{subsec:method_architecture}
+
+Flow $i$ is represented by a selected and padded packet-feature matrix
+$\mathbf{X}_i\in\mathbb{R}^{L\times d_p}$, a packet inter-arrival tensor
+$\mathbf{u}_i\in\mathbb{R}^{L}$, a validity mask
+$\mathbf{m}_i\in\{0,1\}^{L}$, a statistical flow vector
+$\mathbf{s}_i\in\mathbb{R}^{d_f}$, and a binary target
+$y_i\in\{0,1\}$. The principal configuration uses $L=128$. Stage~1 computes
+
+\begin{equation}
+    \left(\boldsymbol{\ell}^{(1)}_i,\mathbf{z}^{(1)}_i\right)
+    =F_{\theta_1}
+    \left(
+        \mathbf{X}_i,\mathbf{u}_i,\mathbf{m}_i,\mathbf{s}_i
+    \right),
+    \label{eq:method_stage1_mapping}
+\end{equation}
+
+Here, $\boldsymbol{\ell}^{(1)}_i\in\mathbb{R}^{2}$ denotes the Stage~1 logits, and $\mathbf{z}^{(1)}_i\in\mathbb{R}^{d}$ is the fused representation supplied to Stage~2. The principal model sets $d=128$.
+
+Once all Stage~1 embeddings are available, flows are stably ordered by start time and flow identifier. Given relation $r$ and target $i$, the bounded causal input to Stage~2 is
+
+\begin{equation}
+    \mathbf{Z}^{(r)}_i=
+    \left[
+        \mathbf{z}^{(1)}_{j_1},\ldots,
+        \mathbf{z}^{(1)}_{j_{K_i}},
+        \mathbf{z}^{(1)}_i
+    \right],
+    \qquad j_k<i,\quad K_i\leq W-1,
+    \label{eq:method_stage2_input}
+\end{equation}
+
+The current flow occupies the final valid position, and the principal setting uses $W=128$ tokens including that target. Stage~2 computes
+
+\begin{equation}
+    \boldsymbol{\ell}^{(2,r)}_i
+    =G_{\theta_2}
+    \left(\mathbf{Z}^{(r)}_i,\boldsymbol{\mu}_i\right),
+    \label{eq:method_stage2_mapping}
+\end{equation}
+
+where left padding is excluded by $\boldsymbol{\mu}_i$. Applying softmax to $\boldsymbol{\ell}^{(2,r)}_i$ yields the final class-1 probability.
+
+As indicated in Figure~\ref{fig:method_architecture}, labels and Suricata alert fields serve only as targets and are absent from both encoders.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{MScCS/ArchitecturalOverview.png}
+    \caption{Detailed architecture of the proposed two-stage detector. The statistical branch conditions Stage~1 packet tokens, while Stage~2 uses the target flow as the query and historical flows as keys and values.}
+    \label{fig:method_architecture}
+\end{figure}
+
+\section{Stage~1: Intra-Flow Time-Aware Representation}
+\label{subsec:method_stage1}
+
+A variable-length packet sequence is reduced by Stage~1 to one flow embedding. The principal processing path comprises record projection, time-aware sinusoidal encoding, flow-conditioned token modulation, pre-normalised Transformer layers, hybrid mask-aware pooling, and a two-class head.
+
+\subsection{Packet-Record Projection}
+\label{subsubsec:packet_projection}
+
+At packet position $t$, the preprocessed vector $\mathbf{x}_{i,t}\in\mathbb{R}^{d_p}$ is mapped into the model space:
+
+\begin{equation}
+    \mathbf{e}_{i,t}
+    =\operatorname{LN}
+    \left(W_p\mathbf{x}_{i,t}+\mathbf{b}_p\right),
+    \qquad
+    \mathbf{e}_{i,t}\in\mathbb{R}^{d}.
+    \label{eq:record_projection}
+\end{equation}
+
+An MLP projection is supported, although the principal configuration applies a single linear map followed by layer normalisation. As specified in Chapter~\ref{sec:dataset_preprocessing}, categorical fields have already been one-hot encoded, numerical variables transformed and robustly scaled, and binary indicators retained in $\{0,1\}$.
+
+\subsection{Cumulative Time-Aware Encoding}
+\label{subsubsec:time_aware_encoding}
+
+Sinusoidal positional encoding captures ordinal packet order but assigns the same adjacency to gaps of microseconds and seconds. Stage~1 augments position with cumulative elapsed time. Preprocessing stores
+
+\begin{equation}
+    u_{i,t}=\log\left(1+\Delta\tau_{i,t}\right),
+    \label{eq:stored_log_iat}
+\end{equation}
+
+where $\Delta\tau_{i,t}$ is the nonnegative microsecond gap from the preceding packet in the same bidirectional flow. The model reconstructs and masks this interval as
+
+\begin{equation}
+    \widehat{\Delta\tau}_{i,t}
+    =m_{i,t}\max\left(0,\exp(u_{i,t})-1\right).
+    \label{eq:reconstructed_iat}
+\end{equation}
+
+Cumulative time and its smoothed logarithmic form are then
+
+\begin{align}
+    c_{i,t} &= \sum_{k=1}^{t}\widehat{\Delta\tau}_{i,k},\\
+    p_{i,t} &= \log\left(1+c_{i,t}+\alpha\right),
+    \qquad \alpha=10^{-7}.
+    \label{eq:cumulative_time_feature}
+\end{align}
+
+With zero-based position $q_t=t-1$, order and time define the coordinate $r_{i,t}=q_t+p_{i,t}$. Channel pair $j$ is encoded by
+
+\begin{align}
+    \operatorname{TE}_{i,t,2j}
+    &=\sin\left(
+        \frac{r_{i,t}}{10000^{2j/d}}
+      \right),\\
+    \operatorname{TE}_{i,t,2j+1}
+    &=\cos\left(
+        \frac{r_{i,t}}{10000^{2j/d}}
+      \right).
+    \label{eq:time_aware_sinusoid}
+\end{align}
+
+Padding positions are assigned zero encodings. A valid packet token becomes
+
+\begin{equation}
+    \widetilde{\mathbf{e}}_{i,t}
+    =\operatorname{Dropout}
+    \left(
+        \mathbf{e}_{i,t}+m_{i,t}\operatorname{TE}_{i,t}
+    \right).
+    \label{eq:time_encoded_packet}
+\end{equation}
+
+This formulation adapts the time-aware Transformer principle in GTID \cite{Han2023GTID} to structured packet metadata without payload content. Two ablations isolate its coordinates: time-only encoding sets $r_{i,t}=p_{i,t}$, whereas position-only encoding sets $r_{i,t}=q_t$.
+
+\subsection{Flow-Statistics Encoder}
+\label{subsubsec:flow_encoder}
+
+A bottleneck encoder maps the separately preprocessed flow vector $\mathbf{s}_i$ to the packet-model dimension:
+
+\begin{equation}
+    \mathbf{f}_i
+    =\operatorname{LN}_2
+    \left(
+        W_{f,2}\,
+        \operatorname{Dropout}
+        \left(
+            \operatorname{GELU}
+            \left(
+                \operatorname{LN}_1(W_{f,1}\mathbf{s}_i+\mathbf{b}_{f,1})
+            \right)
+        \right)
+        +\mathbf{b}_{f,2}
+    \right).
+    \label{eq:flow_feature_encoder}
+\end{equation}
+
+Its principal hidden and output dimensions are 32 and 128, respectively. Restricting the statistical branch in this way reduces the chance that a high-dimensional aggregate vector dominates evidence learned from packets.
+
+\subsection{Bounded Flow-Conditioned Token Modulation}
+\label{subsubsec:token_film}
+
+Feature-wise linear modulation (FiLM) motivates the principal Stage~1 fusion mechanism: conditioning information generates affine parameters for individual features \cite{Perez2018FiLM}. A small network derives from the flow representation
+
+\begin{equation}
+    [\boldsymbol{\gamma}_i;\boldsymbol{\beta}_i]
+    =G_f(\mathbf{f}_i),
+    \qquad
+    \boldsymbol{\gamma}_i,\boldsymbol{\beta}_i\in\mathbb{R}^{d}.
+    \label{eq:film_parameters}
+\end{equation}
+
+The unbounded flow-conditioned residual for packet token $t$ is
+
+\begin{equation}
+    \mathbf{r}^{\mathrm{raw}}_{i,t}
+    =\eta
+    \left(
+        \boldsymbol{\gamma}_i\odot\widetilde{\mathbf{e}}_{i,t}
+        +\boldsymbol{\beta}_i
+    \right),
+    \qquad
+    \eta=\sigma(a),\qquad a_{0}=-5,
+    \label{eq:film_raw_residual}
+\end{equation}
+
+where $\odot$ is element-wise multiplication and the initial scale is $\sigma(-5)\approx0.0067$. A second constraint bounds this residual relative to the packet-token norm. For the configured maximum ratio $\rho=0.13$,
+
+\begin{align}
+    \lambda_{i,t}
+    &=\min\left(
+        1,
+        \frac{\rho\|\widetilde{\mathbf{e}}_{i,t}\|_2}
+             {\|\mathbf{r}^{\mathrm{raw}}_{i,t}\|_2+\epsilon}
+      \right),\\
+    \mathbf{e}^{F}_{i,t}
+    &=\widetilde{\mathbf{e}}_{i,t}
+      +\lambda_{i,t}\mathbf{r}^{\mathrm{raw}}_{i,t}.
+    \label{eq:bounded_token_film}
+\end{align}
+
+Zero initialisation is used for the layer that produces $\boldsymbol{\gamma}_i$ and $\boldsymbol{\beta}_i$. Training therefore starts from the packet-only pathway, after which a bounded statistical correction can be learned. Such a constraint is useful when aggregate features are informative yet potentially noisy or capture-specific.
+
+Because the statistical vector is encoded separately and then modulates packet tokens before self-attention, the principal configuration constitutes \emph{separate-branch conditional intermediate fusion}, rather than strict late fusion after pooling. Although a post-pooling gated alternative is implemented, the reported Scheme~C results use the bounded token-FiLM operation in Equation~\ref{eq:bounded_token_film}.
+
+\subsection{Masked Transformer Encoder}
+\label{subsubsec:stage1_transformer}
+
+Pre-normalised Transformer layers process the conditioned sequence $\mathbf{E}^{F}_i\in\mathbb{R}^{L\times d}$. At layer $\ell$,
+
+\begin{align}
+    \mathbf{A}^{\ell}_i
+    &=\operatorname{MHA}
+      \left(
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i),
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i),
+        \operatorname{LN}(\mathbf{H}^{\ell-1}_i);
+        \mathbf{m}_i
+      \right),\\
+    \overline{\mathbf{H}}^{\ell}_i
+    &=\mathbf{H}^{\ell-1}_i
+      +\operatorname{Dropout}(\mathbf{A}^{\ell}_i),\\
+    \mathbf{H}^{\ell}_i
+    &=\overline{\mathbf{H}}^{\ell}_i
+      +\operatorname{FFN}
+       \left(\operatorname{LN}(\overline{\mathbf{H}}^{\ell}_i)\right),
+    \label{eq:stage1_transformer_layer}
+\end{align}
+
+with $\mathbf{H}^{0}_i=\mathbf{E}^{F}_i$. Scaled dot-product attention is applied in every head:
+
+\begin{equation}
+    \operatorname{Attn}(Q,K,V)
+    =\operatorname{softmax}
+      \left(
+        \frac{QK^{\top}}{\sqrt{d_h}}+M_i
+      \right)V,
+    \label{eq:scaled_dot_product_attention}
+\end{equation}
+
+Here, $M_i$ assigns negative infinity to padded keys. GELU is used in the feed-forward sublayer. The principal encoder contains two layers and four attention heads, with model dimension 128, feed-forward dimension 256, and dropout 0.15.
+
+Stage~1 does not apply a causal mask, so every retained packet in the completed or truncated flow may attend to every other retained packet. The stage should therefore be interpreted as flow-level classification, not packet-by-packet early detection. Padding is excluded both as an attention key and during pooling.
+
+\subsection{Hybrid Mask-Aware Pooling}
+\label{subsubsec:hybrid_pooling}
+
+Three complementary summaries reduce the packet states. First, each valid token receives a learned attention score:
+
+\begin{align}
+    a_{i,t}
+    &=\mathbf{w}_{a,2}^{\top}
+      \operatorname{GELU}
+      \left(W_{a,1}\mathbf{h}_{i,t}+\mathbf{b}_{a,1}\right)+b_{a,2},\\
+    \omega_{i,t}
+    &=\frac{m_{i,t}\exp(a_{i,t})}
+      {\sum_{k=1}^{L}m_{i,k}\exp(a_{i,k})},\\
+    \mathbf{z}^{\mathrm{att}}_i
+    &=\sum_{t=1}^{L}\omega_{i,t}\mathbf{h}_{i,t}.
+    \label{eq:stage1_attention_pooling}
+\end{align}
+
+Mask-aware mean and maximum summaries are
+
+\begin{align}
+    \mathbf{z}^{\mathrm{mean}}_i
+    &=\frac{\sum_{t=1}^{L}m_{i,t}\mathbf{h}_{i,t}}
+            {\max(1,\sum_{t=1}^{L}m_{i,t})},\\
+    \mathbf{z}^{\mathrm{max}}_i
+    &=\max_{t:m_{i,t}=1}\mathbf{h}_{i,t}.
+    \label{eq:mean_max_pooling}
+\end{align}
+
+All three summaries contribute to the Stage~1 embedding:
+
+\begin{equation}
+    \mathbf{z}^{(1)}_i
+    =\operatorname{Dropout}
+      \left(
+        \operatorname{GELU}
+        \left(
+          \operatorname{LN}
+          \left(
+            W_o
+            [\mathbf{z}^{\mathrm{att}}_i;
+             \mathbf{z}^{\mathrm{mean}}_i;
+             \mathbf{z}^{\mathrm{max}}_i]
+            +\mathbf{b}_o
+          \right)
+        \right)
+      \right).
+    \label{eq:hybrid_pooling}
+\end{equation}
+
+Attention pooling can concentrate on a few informative packets, the mean captures overall behaviour, and the maximum retains strong local activations. Projecting their concatenation back to dimension $d$ gives Stage~2 a fixed-size vector for every flow.
+
+Stage~1 classification logits are
+
+\begin{equation}
+    \boldsymbol{\ell}^{(1)}_i
+    =h_1(\mathbf{z}^{(1)}_i),
+    \qquad
+    \mathbf{p}^{(1)}_i
+    =\operatorname{softmax}(\boldsymbol{\ell}^{(1)}_i).
+    \label{eq:stage1_classifier}
+\end{equation}
+
+Export occurs before the final two-class layer, preserving a multi-dimensional representation for contextual refinement instead of reducing the flow to one probability.
+
+\subsection{Stage~1 Fusion Variants}
+\label{subsubsec:stage1_variants}
+
+Table~\ref{tab:stage1_fusion_variants} defines three controlled variants. Unless stated otherwise, packet features, sequence policy, data split, Transformer capacity, optimisation procedure, and classifier are held constant across them.
+
+\begin{table}[H]
+    \centering
+    \caption{Stage~1 packet/flow integration variants.}
+    \label{tab:stage1_fusion_variants}
+    \small
+    \begin{tabular}{@{}p{1.1cm}p{3.1cm}p{8.9cm}@{}}
+        \toprule
+        Scheme & Input structure & Integration mechanism \\
+        \midrule
+        A & Packet + repeated flow statistics & The transformed flow vector is concatenated to every packet before record projection. \\
+        B & Packet only & The flow-statistics branch is disabled; this isolates packet order and time-aware encoding. \\
+        C & Packet + separate flow branch & The flow vector is encoded once and conditionally modulates packet tokens through bounded token-FiLM. This is the principal proposed Stage~1 configuration. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\section{Stage~2: Causal Inter-Flow Context Modelling}
+\label{subsec:method_stage2}
+
+Stage~2 tests whether recent related behaviour changes the interpretation of a target flow. Its inputs are restricted to Stage~1 embeddings and context metadata; raw packet fields, aggregate flow features, and historical labels are not loaded.
+
+\subsection{Embedding Interface and Chronological Order}
+\label{subsubsec:embedding_interface}
+
+For each split, Stage~1 exports
+
+\begin{equation}
+    \left(
+      \operatorname{flow\_id}_i,
+      y_i,
+      \mathbf{z}^{(1)}_i,
+      t_i^{0},u_i,v_i,\rho_i
+    \right),
+    \label{eq:stage1_export_tuple}
+\end{equation}
+
+where $t_i^{0}$ gives the start time, $u_i$ and $v_i$ identify source and destination, and $\rho_i$ records split membership. Stage~2 verifies identifier uniqueness, concatenates the split files, and applies a stable sort on $(t_i^{0},\operatorname{flow\_id}_i)$. Embeddings and metadata are reordered together to preserve alignment.
+
+A deterministic loader without sampling is used for embedding export. The weighted training sampler draws with replacement and would otherwise repeat some flows while omitting others; it is therefore restricted to optimisation batches.
+
+\subsection{Relation-Specific Causal Contexts}
+\label{subsubsec:context_relations}
+
+Context construction proceeds once through the sorted flows in temporal order. Eligible earlier indices are retrieved before target $i$ is added to any history. Table~\ref{tab:context_relations} defines the four relations considered.
+
+\begin{table}[H]
+    \centering
+    \caption{Stage~2 context relations.}
+    \label{tab:context_relations}
+    \small
+    \begin{tabular}{@{}p{3.0cm}p{4.0cm}p{7.1cm}@{}}
+        \toprule
+        Method & Eligibility condition for $j<i$ & Interpretation \\
+        \midrule
+        \methodfield{time_only} & Always eligible & Most recent flows globally, regardless of endpoint identity. \\
+        \methodfield{source_host} & $u_j=u_i$ & Earlier flows initiated by the same source identifier. \\
+        \methodfield{destination_host} & $v_j=v_i$ & Earlier flows directed to the same destination identifier. \\
+        \methodfield{endpoint} &
+        $\{u_j,v_j\}\cap\{u_i,v_i\}\neq\varnothing$ & Earlier flows sharing at least one endpoint in either role. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+For a given relation $r$, define
+
+\begin{equation}
+    \mathcal{A}^{(r)}_i
+    =\left\{j<i:R_r(i,j)=1\right\}.
+    \label{eq:method_eligible_context}
+\end{equation}
+
+Split-policy filtering and deduplication are applied before retaining the latest $W-1$ indices:
+
+\begin{equation}
+    \mathcal{C}^{(r)}_i
+    =\operatorname{Recent}_{W-1}
+      \left(\mathcal{A}^{(r)}_i\right).
+    \label{eq:recent_context}
+\end{equation}
+
+Appending the current flow yields Equation~\ref{eq:method_stage2_input}. Histories are not updated until this sequence has been formed, preventing both self-inclusion and access to future items. Under the principal \methodfield{online} policy, a validation target may retrieve earlier training flows; a test target may retrieve earlier training, validation, and test flows. Future flows and historical labels remain unavailable. This policy approximates a detector whose state persists through chronological deployment.
+
+In this implementation, ``causal'' refers to stable flow-start order: every context index occurs before its target index. The stronger condition $t_j^{\mathrm{end}}\leq t_i^{0}$ is not enforced during Stage~2 export. A long-lived overlapping flow can therefore precede the target even when its complete embedding would not have been available at the target's start time. What is evaluated is thus start-ordered, label-free context, rather than a fully timed streaming system. Production eligibility should instead be based on flow completion or embedding availability.
+
+The \methodfield{time_only} relation denotes global chronological recency; it does not provide continuous inter-flow gaps to Stage~2. Explicit microsecond timing is confined to Stage~1, whereas Stage~2 represents relative age within the selected context.
+
+Short sequences are padded on the left during collation, keeping the target at the final valid position:
+
+\begin{equation}
+    [\mathrm{PAD},\ldots,\mathrm{PAD},
+      \mathbf{z}^{(1)}_{j_1},\ldots,
+      \mathbf{z}^{(1)}_{j_{K_i}},
+      \mathbf{z}^{(1)}_i].
+    \label{eq:left_padded_context}
+\end{equation}
+
+A Boolean mask prevents the physical padding positions from affecting either positional encoding or attention.
+
+\subsection{Context-Age Positional Encoding}
+\label{subsubsec:context_age_encoding}
+
+For a target with $K_i$ historical tokens, age 0 is assigned to the target, age 1 to the most recent historical flow, and age $K_i$ to the oldest retained item. Writing this index as $a_{i,k}$, Stage~2 adds the sinusoidal encoding
+
+\begin{align}
+    \operatorname{PE}_{i,k,2j}
+    &=\sin\left(
+        \frac{a_{i,k}}{10000^{2j/d}}
+      \right),\\
+    \operatorname{PE}_{i,k,2j+1}
+    &=\cos\left(
+        \frac{a_{i,k}}{10000^{2j/d}}
+      \right).
+    \label{eq:stage2_age_encoding}
+\end{align}
+
+Because age is independent of absolute tensor position, additional left padding does not change it. Identical target-history orderings consequently receive identical encodings even when batch sequence lengths differ.
+
+\subsection{Target-Query Gated Multi-Head Attention}
+\label{subsubsec:target_query_attention}
+
+The principal Stage~2 model, \methodfield{target_query_gated}, does not update every historical token through pairwise self-attention. Instead, the current flow supplies a single query over its eligible history. Let $\mathbf{c}_i$ denote the projected Stage~1 representation of the current flow and $\widetilde{\mathbf{H}}_i\in\mathbb{R}^{K_i\times d}$ the age-encoded history. Attention head $h$ computes
+
+\begin{align}
+    \mathbf{q}^{h}_i
+    &=W_Q^{h}\operatorname{LN}
+      \left(\mathbf{c}_i+\operatorname{PE}(0)\right),\\
+    \mathbf{K}^{h}_i
+    &=\operatorname{LN}(\widetilde{\mathbf{H}}_i)W_K^{h},\\
+    \mathbf{V}^{h}_i
+    &=\operatorname{LN}(\widetilde{\mathbf{H}}_i)W_V^{h},\\
+    \mathbf{h}^{h}_i
+    &=\operatorname{softmax}
+      \left(
+        \frac{\mathbf{q}^{h}_i(\mathbf{K}^{h}_i)^{\top}}
+             {\sqrt{d_h}}+M_i
+      \right)
+      \mathbf{V}^{h}_i.
+    \label{eq:target_query_attention}
+\end{align}
+
+Concatenation and projection of the head outputs produce the historical summary $\mathbf{h}_i$. When the eligible history is empty, $\mathbf{h}_i$ is set explicitly to zero so that an artificial padding item cannot supply context.
+
+Difference and multiplicative terms compare the current representation with its context summary:
+
+\begin{align}
+    \mathbf{r}_i
+    &=[\mathbf{c}_i;\mathbf{h}_i;
+       \mathbf{c}_i-\mathbf{h}_i;
+       \mathbf{c}_i\odot\mathbf{h}_i],\\
+    \mathbf{v}_i
+    &=[\mathbf{h}_i;
+       \mathbf{c}_i-\mathbf{h}_i;
+       \mathbf{c}_i\odot\mathbf{h}_i].
+    \label{eq:target_context_interactions}
+\end{align}
+
+A dimension-wise gate controls the subsequent context update:
+
+\begin{align}
+    \mathbf{g}_i&=\sigma(G(\mathbf{r}_i)),\\
+    \mathbf{d}_i&=U(\mathbf{v}_i),\\
+    \mathbf{f}_i&=\operatorname{LN}
+      \left(\mathbf{c}_i+\mathbf{g}_i\odot\mathbf{d}_i\right).
+    \label{eq:gated_context_update}
+\end{align}
+
+If no history exists, $\mathbf{g}_i$ and $\mathbf{d}_i$ are both zero and the current-flow representation passes through unchanged. A residual feed-forward block then produces
+
+\begin{align}
+    \mathbf{z}^{(2)}_i
+    &=\operatorname{LN}
+      \left(
+        \mathbf{f}_i+\operatorname{FFN}(\mathbf{f}_i)
+      \right),\\
+    \boldsymbol{\ell}^{(2)}_i
+    &=h_2(\mathbf{z}^{(2)}_i).
+    \label{eq:stage2_output}
+\end{align}
+
+Target-query attention preserves a direct path for the current flow and uses history as a learned correction. Since there is only one query, the attention-score matrix grows linearly rather than forming the $W\times W$ matrix required by full self-attention. Multi-head retrieval over a 128-flow window is therefore computationally practical.
+\section{Imbalance-Aware Objective and Stage Interface}
+\label{subsec:method_training}
+
+\subsection{Focal Objective and Controlled Sampling}
+\label{subsubsec:focal_training}
+
+Two-class softmax outputs and focal loss are used in both stages. For target $y_i$ with assigned-class probability $p_{i,y_i}$,
+
+\begin{equation}
+    \mathcal{L}_{\mathrm{focal}}
+    =-\frac{1}{B}
+      \sum_{i=1}^{B}
+      \alpha_{y_i}
+      \left(1-p_{i,y_i}\right)^{\gamma}
+      \log p_{i,y_i}.
+    \label{eq:method_focal_loss}
+\end{equation}
+
+Originally introduced for severe foreground/background imbalance, focal loss downweights examples that are already classified easily \cite{Lin2017FocalLoss}. Table~\ref{tab:experimental_training_config} reports the chosen focal exponent, class weights, and label-smoothing values.
+
+A controlled weighted sampler additionally determines training batches. Given class counts $n_0$ and $n_1$ and desired expected positive share $q$, negative and positive examples receive
+
+\begin{equation}
+    w_0=\frac{1-q}{n_0},
+    \qquad
+    w_1=\frac{q}{n_1}.
+    \label{eq:controlled_sampler}
+\end{equation}
+
+Sampling changes expected minority exposure but leaves both the underlying dataset and the loss definition intact. Chapter~\ref{sec:experimental_methodology} specifies stage-specific target proportions and loader policies.
+
+\subsection{Sequential Stage Interface}
+\label{subsec:sequential_stage_interface}
+
+After Stage~1 has been trained for flow classification, its validation-selected checkpoint is restored. A deterministic loader without sampling exports one $\mathbf{z}^{(1)}_i$ and the required context metadata for every flow. These embeddings remain fixed during Stage~2 training, and no Stage~2 gradient reaches the earlier encoder. The sequential interface consequently allows Stage~1 comparisons to vary intra-flow representation while all Stage~2 models reason over a common representation.
+
+\providecommand{\ExpPlatform}{Google Colaboratory Pro+}
+\providecommand{\ExpComputeBudget}{600 purchased compute units}
+\providecommand{\ExpGPU}{NVIDIA L4 (24~GB)}
+\providecommand{\ExpCPU}{Google Colab hosted CPU; exact model not retained in the run metadata}
+\providecommand{\ExpOS}{Google Colab hosted Linux runtime}
+\providecommand{\ExpSoftware}{PyTorch and scikit-learn on CUDA; exact version snapshot not retained}
+\providecommand{\ExpSuricata}{Suricata with the custom output module; exact version and revision not retained}
+
+\chapter{Experimental Methodology}
+\label{sec:experimental_methodology}
+
+Within a comparison block, the data manifest, fitted preprocessing state, optimisation budget, checkpoint criterion, threshold rule, and random seed remain fixed. Validation PR-AUC determines the checkpoint, and validation class-1 F1 determines the decision threshold. The untouched test partition is evaluated only after both choices have been fixed. This protocol limits temporal leakage and feedback from test results, two sources of optimistic NIDS estimates \cite{SommerPaxson2010,Arp2022DosDonts}.
+
+\section{Evaluation Manifests and Leakage Controls}
+\label{subsec:experimental_data_protocol}
+
+Evaluation is organised around two chronological manifests. Comparisons of Stage~1 architectures, encodings, fusion schemes, sequence lengths, and selection policies use 35,410 test flows: 34,003 negative and 1,407 positive. The hierarchical Scheme~C reference and every Stage~2 experiment instead use the complete 84,380-flow test partition, comprising 80,860 negative and 3,520 positive flows. Results from these manifests are not paired, even when their rounded values happen to be close; effect sizes are calculated only between models sharing the same manifest.
+
+All models within a block receive identical flows, packet and flow tensors, partition assignments, and train-fitted preprocessing. Training data alone determine category vocabularies, clipping limits, scaling parameters, and sampler weights. Configured class weights and sampling targets are also chosen without test feedback; neither validation nor test observations contribute to fitted transformations.
+
+One frozen Stage~1 checkpoint supplies all Stage~2 inputs. Under online context construction, only embeddings earlier in stable start-time order are eligible. Validation targets may consult preceding training flows, while test targets may consult preceding flows from training, validation, or testing. A history is updated after the current context has been assembled, and it never exposes future embeddings or past labels. Embedding files, metadata ordering, context indices, and masks are reused across Stage~2 architectures, isolating the encoder or relation under study from context availability. Section~\ref{subsubsec:context_relations} distinguishes this start-ordered condition from strict availability at flow-completion time.
+
+\subsection{External Evaluation Protocol}
+\label{subsec:external_evaluation_protocol}
+
+External evaluation keeps \datasetfield{ar002_et12_20260511_001} as the source training dataset and does not merge either external dataset into the source chronological partitions. The source-trained Stage~1 and Stage~2 checkpoints are applied to compatible external-test artefacts. External labels are reserved for metric calculation. Feature order, training-fitted clipping and scaling parameters, categorical vocabularies, model checkpoints, context relation, context capacity, and the source-validation decision threshold remain unchanged. No external test label is used for checkpoint selection, early stopping, threshold selection, or model comparison.
+
+For CICIDS2017, the external flows are kept in chronological order and divided into non-overlapping 20,000-flow windows. Before model-performance comparison, windows are screened by class composition: label~1 must remain less frequent than label~0, matching the qualitative imbalance direction of the source dataset. This prevalence criterion yields \texttt{w01}, \texttt{w02}, \texttt{w06}, \texttt{w07}, and \texttt{w08}; it is not defined from their predictive scores. Stage~2 histories are constructed only from flows earlier than the target within the permitted external evaluation stream, and labels are never included in a history. Each reported window retains its original class composition. Results are presented separately by window and after pooling the five confusion matrices. Pooled ROC-AUC and PR-AUC require the flow-level scores to be concatenated and recomputed; they are therefore not inferred from confusion matrices or averaged and presented as a single-sample ranking measure.
+
+The company-provided firewall capture is evaluated as one 38,513-flow cross-server set. Since it originates from a different server environment, it tests environmental transfer while remaining organisational data. External scores are not used to replace the internal chronological test: the internal test measures later source-domain traffic, whereas the two external evaluations measure public cross-dataset and company cross-server transfer.
+
+\section{Experimental Matrix}
+\label{subsec:experimental_matrix}
+
+Table~\ref{tab:experiment_matrix} distinguishes experiments on the packet encoder from those evaluating the complete hierarchy.
+
+\begin{table}[H]
+    \centering
+    \caption{Experimental matrix. Only the factor listed in the final column is changed within each experiment group.}
+    \label{tab:experiment_matrix}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{@{}lllll@{}}
+        \toprule
+        Group & Stage & Fixed reference & Compared alternatives & Varied factor \\
+        \midrule
+        S1-E1 & 1 & Stage~1 manifest & Flow MLP; packet sequence models; proposed Stage~1 & Encoder family \\
+        S1-E2 & 1 & Scheme B, $L=128$, head & Both, position-only, time-only, no encoding & Temporal/order encoding \\
+        S1-E3 & 1 & Both encodings, $L=128$, head & Schemes A, B, C & Flow-statistics integration \\
+        S1-E4 & 1 & Scheme B, head & $L=8,16,32,64,128,256$ & Packet budget \\
+        S1-E5 & 1 & Scheme B, $L=128$ & Head, head-tail, random & Truncation policy \\
+        S2-E1 & 2 & flow manifest; same frozen embeddings & No-context MLP; Transformer; LSTM; GRU; CNN+LSTM; proposed & Context encoder \\
+        S2-E2 & 2 & Proposed model, $W=128$ & Time-only, source-host, destination-host, endpoint & Context relation \\
+        S2-E3 & 2 & Proposed model, source-host & $W=16,32,64,128,256$ & Context capacity \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+\subsection{Stage~1 Baselines}
+\label{subsubsec:stage1_baselines}
+
+Stage~1 is evaluated against the following baselines:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Flow-level MLP.} A multilayer perceptron consumes only the aggregated statistical flow vector. It provides the direct reference for testing whether packet-level sequence information adds value beyond conventional flow aggregation.
+
+    \item \textbf{CNN1D.} Parallel one-dimensional convolutions with kernel sizes 3, 5, and 7 capture local packet motifs, followed by global pooling and classification. A second variant concatenates the log inter-arrival feature to each packet record. The design follows the general use of multi-kernel convolution for sequence classification \cite{Kim2014CNN}.
+
+    \item \textbf{LSTM and BiLSTM.} Two-layer recurrent encoders with hidden width 128 and mean pooling provide unidirectional and bidirectional sequence references. The LSTM-with-time variant concatenates the stored log inter-arrival value to each packet vector
+    \cite{Hochreiter1997LSTM}.
+
+    \item \textbf{GRU.} A two-layer, width-128 GRU with mean pooling tests whether a lighter gated recurrent encoder is sufficient \cite{Cho2014GRU}.
+
+\end{itemize}
+
+Packet tensors, masks, the chronological partition, focal objective, sampler, optimiser, training budget, and model-selection protocol are shared by all Stage~1 baselines. Parameter counts are not artificially matched. Instead, trainable parameters and runtime are reported beside predictive metrics to expose performance--efficiency trade-offs.
+
+\subsection{Stage~1 Ablations and Sensitivity Tests}
+\label{subsubsec:stage1_ablation_protocol}
+
+Four variants separate the effects of order and elapsed time: (i) joint positional and time-aware encoding, (ii) position only, (iii) time only, and (iv) neither coordinate. Packet features and Transformer capacity are unchanged. This control matters because appending an interval to a feature vector is not equivalent to using elapsed time as the coordinate of a sinusoidal sequence representation.
+
+The three schemes in Table~\ref{tab:stage1_fusion_variants} assess how flow statistics should be incorporated. Scheme~A repeats the aggregate vector at every packet position; Scheme~B removes it; Scheme~C applies bounded token-FiLM conditioning from a separate branch. Packet-encoder and truncation experiments use Scheme~B to isolate sequence modelling. Scheme~C constitutes the complete Stage~1 model and provides embeddings for Stage~2.
+
+Sequence-length sensitivity is tested at $L\in\{8,16,32,64,128,256\}$ with \texttt{head} selection. A separate experiment holds $L=128$ and contrasts \texttt{head}, \texttt{head\_tail}, and deterministic \texttt{random} sampling. No other setting changes in either sweep.
+
+\subsection{Stage~2 Baselines and Context Ablations}
+\label{subsubsec:stage2_baseline_protocol}
+
+Five controls are used to assess the target-query gated attention model:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{No-context MLP} classifies only the current Stage~1 embedding and provides a minimal current-flow-only lower bound. Because it is not capacity matched to the contextual encoders, it is not by itself a causal estimate of the value of history.
+
+    \item \textbf{Vanilla Transformer} applies full self-attention to the same context sequence and classifies its last valid token \cite{Vaswani2017}.
+
+    \item \textbf{LSTM} and \textbf{GRU} replace attention with recurrent context encoders while preserving the Stage~1 inputs, context window, masks, and classifier protocol \cite{Hochreiter1997LSTM,Cho2014GRU}.
+
+    \item \textbf{CNN+LSTM} applies parallel temporal convolutions with kernel sizes 3, 5, and 7 before a two-layer LSTM, combining local pattern extraction with recurrent context modelling \cite{Kim2014CNN,Hochreiter1997LSTM}.
+\end{itemize}
+
+During architecture comparison, each contextual baseline receives the same \texttt{source\_host} histories at $W=128$, with the current flow occupying the final valid position. Since the target consumes one position, at most 127 historical flows are available. The no-context control keeps the target embedding and discards the preceding history.
+
+Relation sensitivity holds the proposed encoder and $W=128$ fixed while varying eligibility among \texttt{time\_only}, \texttt{source\_host}, \texttt{destination\_host}, and \texttt{endpoint}. Window sensitivity instead fixes \texttt{source\_host} and evaluates $W\in\{16,32,64,128,256\}$. Run summaries contain predictive metrics and confusion matrices but do not retain target-level context occupancy or age. Interpretation of the window sweep therefore acknowledges that missing diagnostic information.
+
+\section{Training, Model Selection, and Thresholding}
+\label{subsec:experimental_training_protocol}
+
+\subsection{Principal Training Configuration}
+\label{subsubsec:principal_training_config}
+
+Principal architecture and optimisation settings are listed in Table~\ref{tab:experimental_training_config}. Both stages use AdamW, which decouples weight decay from adaptive gradient updates \cite{Loshchilov2019AdamW}, together with focal loss to downweight easy majority-class examples \cite{Lin2017FocalLoss}.
+
+\begin{table}[H]
+    \centering
+    \caption{Principal optimisation configuration. Values changed in a named ablation are the only exceptions.}
+    \label{tab:experimental_training_config}
+    \begin{tabular}{@{}p{3.0cm}p{4.6cm}p{5.7cm}@{}}
+        \toprule
+        Setting & Stage~1 & Stage~2 \\
+        \midrule
+        Architecture and input & Scheme C; $L=128$; head selection; $d=128$ & Target-query gated attention; source-host; $W=128$; $d=128$ \\
+        Batch size & 128 & 128 \\
+        Optimiser & AdamW & AdamW \\
+        Learning rate & $1\times10^{-4}$ & $3\times10^{-5}$ \\
+        Weight decay & $1\times10^{-4}$ & $3\times10^{-4}$ \\
+        % Gradient clipping & Global norm 1.0 & Global norm 0.5 \\
+        Loss & Focal, $\gamma=1$, $\boldsymbol{\alpha}=[1,1.25]$, no label smoothing & Focal, $\gamma=1$, $\boldsymbol{\alpha}=[1,1.01]$, no label smoothing \\
+        Sampler target & 10\% class-1 examples & 5\% class-1 examples \\
+        Maximum epochs & 500 & 500 \\
+        Early-stopping patience & 25 epochs & 15 epochs \\
+        Checkpoint criterion & Validation PR-AUC & Validation PR-AUC \\
+        % Random seed & 130 & 130 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Weighted sampling with replacement is restricted to training mini-batches. Validation, test, and embedding-export loaders preserve exactly one row per flow and do not sample, preventing duplicated embeddings or changes to the empirical evaluation distribution. CUDA runs use automatic mixed precision. Stage~1 lowers its learning rate after a plateau in validation PR-AUC, whereas Stage~2 follows five warm-up epochs with cosine annealing.
+
+\subsection{Checkpoint and Decision-Threshold Selection}
+\label{subsubsec:experimental_thresholding}
+
+Checkpoint and decision-threshold selection are separate operations applied uniformly across experiments. First, the checkpoint with the highest validation PR-AUC is restored. Validation predictions from that checkpoint then determine the class-1 threshold:
+\begin{equation}
+    \delta^{*}
+    =\arg\max_{\delta\in\Delta}
+      F_{1,1}^{\mathrm{val}}(\delta).
+    \label{eq:validation_threshold_selection}
+\end{equation}
+In Stage~1, $\Delta$ contains thresholds induced by the validation precision--recall curve; Stage~2 searches 199 equally spaced values between 0.01 and 0.99. Once selected, $\delta^{*}$ is fixed and transferred to the test partition without adjustment. Test observations play no role in checkpoint, threshold, or hyperparameter selection.
+
+\section{Evaluation Metrics}
+\label{subsec:experimental_metrics}
+
+Metric calculations follow scikit-learn definitions \cite{Pedregosa2011ScikitLearn}. The alert-derived positive class is label~1 and the negative class label~0. Confusion matrices use the fixed orientation
+\begin{equation}
+    \mathbf{C}=
+    \begin{bmatrix}
+        \mathrm{TN} & \mathrm{FP}\\
+        \mathrm{FN} & \mathrm{TP}
+    \end{bmatrix},
+    \label{eq:experimental_confusion_matrix}
+\end{equation}
+with true labels on rows and predictions on columns. Fixing this convention removes ambiguity when matrices are transferred between software packages.
+
+\subsection{Class-Wise and Macro-Averaged Measures}
+\label{subsubsec:macro_metrics}
+
+For $c\in\{0,1\}$, class-wise precision, recall, and F1 are
+\begin{align}
+    P_c &= \frac{\mathrm{TP}_c}
+    {\mathrm{TP}_c+\mathrm{FP}_c}, \\
+    R_c &= \frac{\mathrm{TP}_c}
+    {\mathrm{TP}_c+\mathrm{FN}_c}, \\
+    F_{1,c} &= \frac{2P_cR_c}{P_c+R_c}.
+    \label{eq:classwise_metrics}
+\end{align}
+Undefined ratios take the value zero, consistent with the implementation's
+\texttt{zero\_division=0} setting. The macro-averaged metrics are
+\begin{align}
+    P_{\mathrm{macro}} &= \frac{P_0+P_1}{2}, \\
+    R_{\mathrm{macro}} &= \frac{R_0+R_1}{2}, \\
+    F_{1,\mathrm{macro}} &= \frac{F_{1,0}+F_{1,1}}{2}.
+    \label{eq:experimental_macro_metrics}
+\end{align}
+
+Macro-F1 is the primary F1 measure and is abbreviated to ``F1'' in high-level tables. It assigns equal weight to the negative and positive classes despite their unequal prevalence; macro-precision and macro-recall are interpreted analogously. To reveal error changes hidden by macro averaging, $P_1$, $R_1$, and $F_{1,1}$ are reported alongside these summaries.
+
+Accuracy and weighted averages remain secondary: an always-negative rule would score approximately $96.055\%$ accuracy on the raw data while detecting no positive flow. Neither high accuracy nor weighted F1 alone is therefore sufficient evidence of effective intrusion detection.
+
+\subsection{False-Positive Rate and Operational Error Counts}
+\label{subsubsec:fpr_metric}
+
+False-positive rate is defined as
+\begin{equation}
+    \mathrm{FPR}=\frac{\mathrm{FP}}{\mathrm{FP}+\mathrm{TN}},
+    \label{eq:false_positive_rate}
+\end{equation}
+and false-negative rate as
+\begin{equation}
+    \mathrm{FNR}=\frac{\mathrm{FN}}{\mathrm{FN}+\mathrm{TP}}
+    =1-R_1.
+    \label{eq:false_negative_rate}
+\end{equation}
+Even a low FPR can generate substantial alert volume in a high-throughput network. It is therefore considered together with absolute FP and FN counts. At the evaluated operating point, a test partition with $N_0$ negative flows produces an expected $N_0\times\mathrm{FPR}$ false alerts.
+
+\subsection{Threshold-Independent Ranking Measures}
+\label{subsubsec:ranking_metrics}
+
+ROC-AUC measures ranking through the true-positive rate over the range of false-positive rates \cite{Fawcett2006ROC}. Under strong class imbalance, however, a large negative population can coexist with a high ROC-AUC. PR-AUC concentrates on retrieval of the positive class and consequently receives greater emphasis here \cite{SaitoRehmsmeier2015}.
+
+The reported \texttt{pr\_auc} field is produced by scikit-learn's \texttt{average\_precision\_score}, rather than by trapezoidal integration under linearly interpolated precision--recall points:
+\begin{equation}
+    \mathrm{PR\mbox{-}AUC}=\sum_{k}(R_k-R_{k-1})P_k,
+    \label{eq:average_precision}
+\end{equation}
+where $P_k$ and $R_k$ are evaluated at successive score thresholds. The name PR-AUC is used consistently throughout the thesis for this implementation. Since random ranking has an expected PR-AUC near positive prevalence, observed values should be interpreted against the class-1 share of the relevant test manifest.
+
+\section{Efficiency and Resource Measurement}
+\label{subsec:efficiency_protocol}
+
+Experiments ran in Google Colaboratory Pro+ on an NVIDIA L4 GPU with 24~GB memory, using a company-funded allocation of 600 compute units \cite{GoogleColabFAQ2026,NVIDIAL4ProductBrief}. Those units regulate access to hosted resources and do not quantify a fixed amount of GPU computation. Runtime is compared only within the same stage because Stage~1 and Stage~2 differ in data loading, early stopping, and execution path.
+
+Trainable parameters are counted directly from tensors that require gradients. Stage~1 wall time includes fitting, validation, and checkpointing. It is treated as a descriptive single-run cost because early stopping and variation in the hosted environment affect duration. For Stage~2 timing, gradients are disabled and the model is placed in evaluation mode. Per-flow latency is calculated as
+\begin{equation}
+    t_{\mathrm{flow}}=\frac{T_{\mathrm{test}}}{N_{\mathrm{test}}},
+    \qquad
+    Q=\frac{N_{\mathrm{test}}}{T_{\mathrm{test}}},
+    \label{eq:inference_efficiency}
+\end{equation}
+where $Q$ denotes flows processed per second. Timing starts after Stage~1 embeddings and context indices have been prepared, so it measures model evaluation rather than the complete path from PCAP to alert.
+
+\begin{table}[H]
+    \centering
+    \caption{Execution environment for the reported experiment blocks.}
+    \label{tab:experimental_environment}
+    \begin{tabular}{@{}p{3.4cm}p{10.0cm}@{}}
+        \toprule
+        Component & Recorded environment \\
+        \midrule
+        Hosted platform & \ExpPlatform \\
+        Purchased allocation & \ExpComputeBudget \\
+        Accelerator & \ExpGPU \\
+        Host processor and RAM & \ExpCPU \\
+        Operating environment & \ExpOS \\
+        Learning software & \ExpSoftware \\
+        Traffic extractor & \ExpSuricata \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Available run metadata do not retain the exact CPU, software snapshot, Suricata version, ruleset snapshot, configuration, custom-module revision, or PCAP checksum. Exact reproduction of runtime and label generation is consequently limited, and the missing provenance is identified as unavailable rather than reconstructed after the fact.
+\providecommand{\resultsfigurepath}{figures}
+\IfFileExists{figures/stage1_model_comparison.pdf}{}{%
+    \renewcommand{\resultsfigurepath}{MScCS/figures}%
+}
+
+\chapter{Results and Discussion}
+\label{sec:results}
+
+Unless explicitly qualified, F1, precision, and recall refer to macro averages; class-1 quantities carry a separate label. Discussion centres on macro-F1, PR-AUC, class-1 performance, FP, FN, and FPR because the majority class dominates accuracy. Numerical differences are interpreted only when the models share a test manifest.
+
+\section{Stage~1: Intra-Flow Representation}
+\label{subsec:results_stage1}
+
+\subsection{Architecture and Temporal-Encoding Effects}
+\label{subsubsec:results_stage1_models}
+
+Stage~1 model families and encoding ablations are contrasted on a common flow test set in Figure~\ref{fig:results_stage1_models}; their parameter counts and training times appear in Table~\ref{tab:results_stage1_errors_efficiency}.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_model_comparison.pdf}
+    \caption{Stage~1 architecture and encoding comparison on the common flow test manifest. The horizontal axis begins at 0.52, and absolute values are printed at the end of each bar.}
+    \label{fig:results_stage1_models}
+\end{figure}
+
+Among these models, position+time gives the Transformer the best overall balance: macro-F1 reaches $0.8882$ and PR-AUC $0.8564$. LSTM+time is the strongest non-Transformer alternative by macro-F1, yet the Transformer improves this score by 2.05 percentage points. At the selected operating point, 95 additional positive flows are recovered at the cost of 10 more false positives. The gain therefore reflects a materially different error balance rather than a change in a summary score alone.
+
+Encoding ablations separate two meanings of sequence location. Position records where a packet occurs, whereas cumulative time distinguishes a rapid burst from an identical order spread over a longer interval. Time-only encoding exceeds position-only, and combining them adds another 0.64 percentage points of macro-F1. Both FP and FN are also lower than under no encoding. These changes support order and elapsed time as complementary, rather than interchangeable, descriptions of a flow.
+
+The lowest FPR, $0.8293\%$, belongs to the GRU, but that operating point misses 437 positive flows. Position+time introduces only 14 additional FP and removes 131 FN relative to the GRU. A low false-alert rate is therefore not sufficient by itself: conservative thresholds can suppress FP by transferring error to the positive class.
+
+The flow-statistics MLP provides the direct aggregation-only control. It obtains macro-F1 $0.7762$ and PR-AUC $0.5604$ on the same test composition, compared with $0.8882$ and $0.8564$ for position+time. Its 853 FP and 501 FN fall to 296 and 306 when packet dynamics are modelled. Duration, count, and inter-arrival summaries therefore retain useful global information but fail to reconstruct all of the local order and timing present in the packet sequence.
+
+Operating-point errors are shown in Figure~\ref{fig:results_stage1_errors}. Because the negative examples are shared, FP bar height is directly proportional to FPR.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_error_comparison.pdf}
+    \caption{Stage~1 false-positive and false-negative counts on the common flow test manifest. FPR is printed beside each FP count.}
+    \label{fig:results_stage1_errors}
+\end{figure}
+
+LSTM also benefits from explicit time, with reductions in both error types. For CNN, however, the effect is mixed: the selected operating point improves, while PR-AUC declines and FN rises. This disagreement is informative. Thresholded F1 characterises one decision point, whereas PR-AUC evaluates ranking over thresholds. Timing is therefore not beneficial merely because it is present; its representation within the encoder matters, and an appended interval feature is not equivalent to an elapsed-time sequence coordinate.
+
+\begin{table}[H]
+    \centering
+    \caption{Stage~1 parameter counts and single-run training times measured on an NVIDIA L4 GPU in Google Colab.}
+    \label{tab:results_stage1_errors_efficiency}
+    \begin{tabular}{@{}lrrr@{}}
+        \toprule
+        Model & Trainable parameters & Training time (s) & Training time (min) \\
+        \midrule
+        Position+time Transformer & 344,963 & 4,337.6 & 72.29 \\
+        Time-only Transformer & 344,963 & 2,250.5 & 37.51 \\
+        Position-only Transformer & 344,963 & 1,994.7 & 33.25 \\
+        LSTM+time & 217,346 & 3,556.3 & 59.27 \\
+        CNN1D+time & 70,274 & 1,162.4 & 19.37 \\
+        GRU & 162,690 & 3,684.4 & 61.41 \\
+        LSTM & 216,834 & 3,381.2 & 56.35 \\
+        CNN1D & 68,354 & 1,591.0 & 26.52 \\
+        BiLSTM & 564,738 & 2,625.7 & 43.76 \\
+        No-encoding Transformer & 344,963 & 2,213.9 & 36.90 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+No MLP efficiency entry is shown in Table~\ref{tab:results_stage1_errors_efficiency}, as its parameter count and training time were not retained.
+
+CNN1D+time records the shortest Stage~1 training time, 1,162.4 seconds; position+time requires 4,337.6 seconds. Despite the BiLSTM's larger parameter count, the proposed encoder is the most expensive run observed. Each value was collected on an NVIDIA L4 GPU, but it includes early stopping, data loading, and variation in the hosted runtime. These measurements describe total training cost, not architecture-only throughput.
+
+\subsection{Packet and Flow-Statistics Integration}
+\label{subsubsec:results_stage1_fusion}
+
+The fusion comparison in Figure~\ref{fig:results_stage1_fusion} uses one shared flow manifest. Scheme~A tiles the statistical vector across packet tokens, Scheme~B retains packet inputs alone, and Scheme~C conditions packet representations through bounded token-FiLM from a separate branch.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage1_fusion_comparison.pdf}
+    \caption{Controlled Stage~1 integration comparison on the common flow manifest. Left: macro metrics and threshold-independent ranking metrics. Right: false-positive and false-negative counts. The score axis is truncated and explicitly labelled.}
+    \label{fig:results_stage1_fusion}
+\end{figure}
+
+Removing the tiled vector in Scheme~B raises macro-F1 by 1.30 percentage points and PR-AUC by 2.38 points over Scheme~A, although Scheme~A retains a small macro-precision advantage. Repetition of one aggregate vector at every position may therefore interfere with distinctions among packet tokens. Scheme~C strengthens this interpretation: flow statistics appear more useful when encoded through a dedicated pathway than when copied into each packet position.
+
+Scheme~C is strongest overall, with macro-F1 $0.8955$, PR-AUC $0.8763$, 267 FP, and 293 FN. Both error counts improve over packet-only Scheme~B, indicating that aggregate statistics add information when they condition rather than replace packet evidence. Attribution must nevertheless remain at the level of the integrated design. Scheme~C introduces both extra parameters and a separate statistical pathway, so the present ablation cannot assign the entire gain specifically to token-FiLM. A parameter-matched concatenation control would be needed for that narrower claim.
+
+\subsection{Sequence Length and Packet Selection}
+\label{subsubsec:results_sequence_length}
+
+Figure~\ref{fig:results_stage1_sensitivity} presents both sensitivity analyses: sequence length is traced in the line panel, and selection policies are compared through grouped precision and recall bars.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]
+    {\resultsfigurepath/stage1_sensitivity.pdf}
+    \caption{Stage~1 sensitivity analysis. Left: maximum packet-sequence length under head selection. Right: packet-selection strategy at $L=128$. Dashed lines identify the selected sequence length. Truncated axes are explicitly labelled.}
+    \label{fig:results_stage1_sensitivity}
+\end{figure}
+
+Longer sequences do not produce monotonic improvement. Ranking is weaker when only a few early packets are available, implying that those packets are not always sufficient for discrimination. Performance peaks at $L=128$ by macro-F1 and overall error balance. Increasing the budget to 256 adds 46 FP and lowers both macro-F1 and PR-AUC; additional packets can therefore add volume without adding useful evidence.
+
+Aggregate sweep results do not identify the mechanism behind this peak. Changing $L$ affects long truncated flows but leaves sufficiently short flows unchanged, so dilution by later packets cannot be separated from flow-length composition or optimisation effects. Such an explanation would require length-stratified evaluation. Consequently, $L=128$ is treated as the best observed budget for this capture, not a universal horizon.
+
+At $L=128$, the macro-F1 difference between head and head-tail is only 0.16 percentage points. With one seed, this margin is treated as practically inconclusive. Random selection shifts the detector towards lower FPR and more FN. Head remains the principal policy because it is deterministic, provides the best observed macro-F1 and attack-class recall, and preserves a contiguous early prefix without waiting for the flow's final packets. Its small advantage over head-tail is not interpreted as a robust ordering.
+
+\section{Stage~2: Inter-Flow Context}
+\label{subsec:results_stage2}
+
+\subsection{Gain over Independent Flow Classification}
+\label{subsubsec:results_hierarchical_gain}
+
+The principal cross-stage comparison appears in Table~\ref{tab:results_hierarchical_gain}. Both rows share the same test flows: one classifies each Scheme~C embedding independently, and the other augments that frozen representation with causal source-host history.
+
+\begin{table}[H]
+    \centering
+    \caption{Independent Stage~1 classification and the complete hierarchical system on the common full-data manifest.}
+    \label{tab:results_hierarchical_gain}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{@{}lrrrrrrr@{}}
+        \toprule
+        Model & $P_{\mathrm{macro}}$ & $R_{\mathrm{macro}}$ &
+        $F_{1,\mathrm{macro}}$ & $F_{1,1}$ & ROC-AUC & PR-AUC & FPR (\%) \\
+        \midrule
+        Stage~1 Scheme C & 0.8990 & 0.8919 & 0.8954 & 0.7994 & 0.9890 &
+        0.8763 & 0.8249 \\
+        Stage~2 source-host & \textbf{0.9328} & \textbf{0.9224} &
+        \textbf{0.9275} & \textbf{0.8610} & \textbf{0.9938} &
+        \textbf{0.9345} & \textbf{0.5429} \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+Adding Stage~2 raises macro-F1 by 3.21 percentage points and PR-AUC by 5.82 points relative to independent Scheme~C classification. The contextual system removes 228 FP and 205 FN, a relative FPR reduction of approximately 34.2\%. Since both error types decline, the gain is not an accuracy artefact or a simple shift towards one class. This comparison concerns the hierarchy as an integrated system. Subsequent architecture controls test simpler encoders, but the capacity mismatch of the no-context head prevents the full difference from being attributed solely to historical evidence.
+
+
+\subsection{Which Relation Defines Useful Context?}
+\label{subsubsec:results_context_relation}
+
+Figure~\ref{fig:results_stage2_context} links ranking quality to operating behaviour. Macro-F1 and PR-AUC are shown on the left; class-1 recall and FPR locate each relation on the right.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{\resultsfigurepath/stage2_context_analysis.pdf}
+    \caption{Stage~2 context-relation ablation at $W=128$. Left: macro-F1 and PR-AUC. Right: class-1 recall versus FPR, where the desirable region is the upper-left corner.}
+    \label{fig:results_stage2_context}
+\end{figure}
+
+Source-host history yields the strongest balance: macro-F1 is $0.9275$, PR-AUC $0.9345$, and FPR is the lowest among the relations. Repeated outbound activity from one initiator may preserve evidence of scanning, retries, or coordinated connections. Global recency, by comparison, mixes unrelated flows, while destination history may combine many benign clients of a widely used service. This interpretation agrees with relational and window-level findings in prior NIDS work \cite{Deng2023FlowTopology,MartinReizabal2026FlowWindow}, but it remains a mechanism hypothesis because binary labels do not identify the attack families responsible for the gain.
+
+Endpoint context operates at a different point: fewer positives are missed, but more false alerts are produced. Matching either endpoint in either role can retrieve lateral or bidirectional activity, while also admitting a more heterogeneous neighbourhood. It may be appropriate when FN carry a higher operational cost; under the balanced criterion used here, source-host remains preferable. Time-only context ranks flows less effectively and produces more FN, suggesting that chronological proximity without an entity relation is insufficiently selective for this capture.
+
+\subsection{How Much Context Is Useful?}
+\label{subsubsec:results_context_window}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]
+    {\resultsfigurepath/stage2_window_sensitivity.pdf}
+    \caption{Source-host context-window sensitivity. Left: macro-F1 and PR-AUC. Right: false-positive and false-negative counts. The dashed line marks the selected window $W=128$.}
+    \label{fig:results_stage2_window}
+\end{figure}
+
+Context capacity is also non-monotonic in Figure~\ref{fig:results_stage2_window}. A 32-flow window maximises macro-recall, but its 775 FP show the cost of that sensitivity. At 128 flows, macro-F1 reaches $0.9275$, PR-AUC reaches $0.9345$, and FPR falls to its minimum of $0.5429\%$, giving the strongest joint outcome. Both FP and FN rise when the window expands to 256. This pattern is compatible with a finite useful horizon: short histories may omit relevant activity, while increasingly old flows from the same source may have little connection to the current event.
+
+Nominal window size alone cannot explain this response. The run summaries do not retain target-level counts or age distributions for valid context items, so older evidence, padding frequency, and unequal history coverage cannot be disentangled. Performance stratified by realised context length and elapsed span would be needed to test the horizon explanation directly. Within the present design, $W=128$ is therefore an empirical operating point for this capture, not a universal optimum.
+
+\subsection{Stage~2 Architecture Comparison}
+\label{subsubsec:results_stage2_architecture_comparison}
+
+Architecture comparison fixes the Stage~1 embeddings, source-host relation, $W=128$, online policy, objective, optimiser, sampler, checkpoint criterion, and validation threshold search. Only the context encoder and dimensions specific to that encoder vary. Six architectures are displayed in Figure~\ref{fig:results_stage2_architectures}; FP and FN are shown separately in the second panel so that aggregate F1 does not conceal their trade-off.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]
+    {\resultsfigurepath/stage2_architecture_comparison.pdf}
+    \caption{Stage~2 architecture comparison on the common flow test manifest. Left: macro-F1, class-1 F1, and PR-AUC. Right: threshold-dependent false-positive and false-negative counts. Truncated score axes are labelled.}
+    \label{fig:results_stage2_architectures}
+\end{figure}
+
+Target-query attention produces the best combined result, with macro-F1 $0.9275$, class-1 F1 $0.8610$, and PR-AUC $0.9345$. The nearest baseline values are CNN+LSTM's $0.9097$ macro-F1 and GRU's $0.9141$ PR-AUC. LSTM has slightly higher macro-recall, yet that advantage is accompanied by weaker threshold-independent ranking and a less favourable false-alert balance.
+
+Confusion matrices make these differences operationally concrete. Against the vanilla Transformer, target-query attention eliminates 177 FP and 117 FN on the same flows. LSTM recovers 28 more positives than the proposed model but generates 338 additional false alerts. The macro-F1 gain over vanilla attention is therefore not obtained by exchanging one error type for the other, and the precision advantage over the highest-recall recurrent baseline is substantial.
+
+This contrast is consistent with the intended inductive bias. Vanilla self-attention updates the full context sequence and classifies its final valid state; the proposed encoder keeps the current flow as the query and gates the retrieved historical summary. Simultaneous improvement in macro-F1 and PR-AUC is compatible with stronger target-centred ranking of positive examples. It is not, however, a clean isolation of the query pattern, because other architectural choices and parameter counts also differ.
+
+With 514 parameters, the no-context head is far smaller than the 283,522-parameter Stage~2 model. It should be read as a current-flow-only lower bound, not a capacity-matched ablation. Its result shows that the minimal independent head is insufficient, but does not identify how much of the full gap comes from history. A stricter control would preserve the target-query architecture and comparable capacity while masking every historical item.
+
+\subsection{Efficiency and Operational Trade-Offs}
+\label{subsec:results_statistical_efficiency}
+
+Parameter count and measured evaluation latency are related in Figure~\ref{fig:results_stage2_efficiency}, with macro-F1 annotated for each architecture. A logarithmic parameter axis accommodates the range from 514 to more than 1.2 million parameters.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.88\textwidth]
+    {\resultsfigurepath/stage2_efficiency.pdf}
+    \caption{Stage~2 performance--efficiency trade-off. Latency covers model evaluation after Stage~1 embeddings and context indices have been built; it is not end-to-end PCAP-to-alert latency.}
+    \label{fig:results_stage2_efficiency}
+\end{figure}
+
+All profiles in Figure~\ref{fig:results_stage2_efficiency} were collected on an NVIDIA L4. The proposed model has 283,522 parameters and evaluates one flow in 0.1965~ms on average, equivalent to approximately 5,089 flows per second for the measured model path. Vanilla Transformer latency is 0.1967~ms. A difference of 0.0002~ms is too small to support a speed claim; the meaningful observation is latency parity accompanied by a better error balance.
+
+Compared with GRU, LSTM, and CNN+LSTM, parameter count falls by $59.0\%$, $69.3\%$, and $76.7\%$, respectively; measured latency falls by $42.2\%$, $43.3\%$, and $45.2\%$. Unlike the negligible margin over vanilla attention, these differences indicate a genuine compactness and model-level latency advantage over recurrent alternatives. They are not estimates of deployed end-to-end throughput. Context indexing, Stage~1 inference, Suricata extraction, and PCAP processing are excluded, and one aggregate timing cannot characterise warm-up, run-to-run variation, batching effects, or tail latency.
+
+\section{External Generalisation}
+\label{subsec:results_external_generalisation}
+
+The source models are trained on \datasetfield{ar002_et12_20260511_001}. External evaluation then considers the public CICIDS2017 Wednesday-workingHours capture and the company-provided \datasetfield{firewall_test_20250731_160700} capture from a different server. Table~\ref{tab:results_external_scores} reports each chronological CICIDS2017 window separately so that temporal heterogeneity is not hidden by one aggregate score.
+
+\begin{table}[H]
+    \centering
+    \caption{External evaluation on prevalence-compatible public CICIDS2017 Wednesday windows and a separate company server capture.}
+    \label{tab:results_external_scores}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{@{}lrrrrrrr@{}}
+        \toprule
+        Dataset/window & Flows & Positive (\%) & Accuracy &
+        $F_{1,\mathrm{macro}}$ & $F_{1,1}$ & ROC-AUC & PR-AUC \\
+        \midrule
+        CICIDS2017 w01 & 20,000 & 18.195 & 0.9478 & 0.9125 & 0.8569 & 0.9816 & 0.9088 \\
+        CICIDS2017 w02 & 20,000 & 13.515 & 0.9636 & 0.9226 & 0.8663 & 0.9728 & 0.9123 \\
+        CICIDS2017 w06 & 20,000 & 16.480 & 0.9300 & 0.8536 & 0.7479 & 0.9758 & 0.8906 \\
+        CICIDS2017 w07 & 20,000 & 13.340 & 0.9358 & 0.8640 & 0.7651 & 0.9691 & 0.8419 \\
+        CICIDS2017 w08 & 20,000 & 15.235 & 0.9583 & 0.9220 & 0.8688 & 0.9884 & 0.9397 \\
+        Company cross-server & 38,513 & 3.285 & 0.9882 & 0.9026 & 0.8112 & 0.9870 & 0.8771 \\
+        \bottomrule
+    \end{tabular}%
+    }
+\end{table}
+
+Across the five public windows selected by the minority-positive prevalence criterion, the arithmetic mean of window-level macro-F1 is 0.8949, with a range from 0.8536 to 0.9226. Pooling their confusion matrices gives 82,292 TN, 2,355 FP, 2,937 FN, and 12,416 TP over 100,000 flows. The resulting pooled macro-F1 is 0.8966, class-1 F1 is 0.8243, and FPR is 2.7821\%. This pooled macro-F1 is not identical to the mean window-level score because the former is recomputed after aggregating counts. A pooled PR-AUC or ROC-AUC is not claimed here because those ranking measures require concatenated flow-level probabilities rather than confusion-matrix counts.
+
+\begin{table}[H]
+    \centering
+    \caption{External-test confusion matrices and operating-point error rates.}
+    \label{tab:results_external_errors}
+    \begin{tabular}{@{}lrrrrr@{}}
+        \toprule
+        Dataset/window & TN & FP & FN & TP & FPR (\%) \\
+        \midrule
+        CICIDS2017 w01 & 15,830 & 531 & 513 & 3,126 & 3.2468 \\
+        CICIDS2017 w02 & 16,914 & 383 & 345 & 2,358 & 2.2143 \\
+        CICIDS2017 w06 & 16,521 & 183 & 1,218 & 2,078 & 1.0955 \\
+        CICIDS2017 w07 & 16,622 & 710 & 575 & 2,093 & 4.0965 \\
+        CICIDS2017 w08 & 16,405 & 548 & 286 & 2,761 & 3.2325 \\
+        \midrule
+        CICIDS2017 pooled & 82,292 & 2,355 & 2,937 & 12,416 & 2.7821 \\
+        Company cross-server & 37,087 & 161 & 292 & 973 & 0.4322 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The CICIDS2017 results demonstrate meaningful but non-uniform public cross-dataset transfer within windows where label~1 remains the minority. Windows w01 and w02 provide balanced class-1 precision and recall, while w08 gives the strongest class-1 F1 and PR-AUC. Window w06 behaves conservatively: its class-1 precision is 0.9191, but recall falls to 0.6305 and 1,218 positive flows are missed. Since ROC-AUC and PR-AUC remain 0.9758 and 0.8906, respectively, this pattern is compatible with probability or threshold miscalibration under temporal shift rather than complete loss of ranking ability. Window w07 exhibits a different failure mode. It has the largest FP count and the lowest PR-AUC, indicating weaker class separation in addition to its operating-point error balance.
+
+On the separate company server, macro-F1 reaches 0.9026, class-1 F1 reaches 0.8112, and PR-AUC reaches 0.8771. The FPR remains low at 0.4322\%, but class-1 recall is 0.7692, corresponding to 292 FN among 1,265 positive flows. Cross-server degradation is therefore expressed primarily through missed positives rather than an increase in false alerts. Together, the public and organisational external tests show that the learned representation and source-host context retain useful signal outside the source capture, while the window-level variation cautions against treating external performance as invariant across time or environment.
+
+These external comparisons do not isolate dataset shift to one factor. CICIDS2017 and the two company captures can differ in collection conditions, class prevalence, attack composition, host roles, flow construction, and label provenance. In addition, the source-host relation can change meaning under network address translation, shared services, or different host populations. The evidence therefore supports preliminary external generalisation under the implemented evaluation pipeline, not universal transfer to arbitrary networks.
+
+\section{Cross-Stage Discussion}
+\label{subsec:results_cross_stage_discussion}
+
+Different losses of information are addressed at the two levels. Stage~1 restores order and elapsed time that aggregate vectors discard; Stage~2 introduces behavioural evidence absent from independent classification. Ablation results support both roles: position and time contribute complementary intra-flow information, and start-ordered source-host history improves the detector after its Stage~1 representation is fixed. In this respect, the hierarchy extends packet-aware systems such as GTID and modular flow encoders such as FlowTransformer with an explicitly evaluated cross-flow reasoning layer \cite{Han2023GTID,Manocchio2024FlowTransformer}.
+
+With respect to RQ1, time-aware packet modelling exceeds the statistical MLP on a shared manifest, while fusion results show that aggregate measurements still help when used for conditioning rather than replacement. The sequence-length sweep qualifies this result: useful representation depends on which packets are retained and encoded, not on unlimited token growth. For RQ2, Stage~2 lowers both FP and FN relative to independent Scheme~C predictions. Relation and window experiments add a second qualification: context must be selective, and additional neighbouring flows are not automatically useful.
+
+These findings accord with temporal sequence models and graph-based analyses that treat traffic records as dependent \cite{LiuPatras2022NetSentry,Deng2023FlowTopology,Xu2024SSLGNN}. External evaluation further shows that useful signal persists across a public benchmark and a different company server, although its strength and error balance vary by environment and chronological window. The results do not establish source-host history as the best relation for every attack, nor can binary labels reveal which families benefit. A stronger cross-stage analysis would align individual errors, identify which Stage~1 FP and FN are corrected by Stage~2, and relate those transitions to relation type, realised context size, and context age.
+
+Taken together, the evidence indicates that temporal structure within a flow and selective relations across flows remedy different deficiencies of aggregate, independent flow classification.
+
+\chapter{Conclusion and Future Work}
+\label{sec:conclusion_future_work}
+
+\section{Conclusions}
+\label{subsec:conclusion_rq_answers}
+
+\paragraph{RQ1: intra-flow representation.}
+RQ1 is answered in favour of modelling packets as an ordered, time-aware sequence rather than relying only on aggregate flow statistics. Ordinal position and elapsed time provide distinct and complementary information about how a flow develops, while a separate statistical conditioning and fusion pathway further improves the complete Stage~1 representation. The sequence-length experiments qualify this conclusion by showing that observing more packets does not necessarily lead to better performance.
+
+\paragraph{RQ2: cross-flow context.}
+RQ2 is answered by showing that selective historical context can improve classification beyond independent flow prediction. Among the tested relations, source-host context provides the strongest overall balance, whereas endpoint context shifts the operating point towards higher recall at the cost of more false positives. Across the evaluated Stage~2 architectures, the proposed target-query model achieves the strongest overall performance.
+
+Together, these findings answer the central research question by showing that intra-flow temporal structure and selective inter-flow context provide complementary information at different levels of the detection hierarchy. Temporal structure describes how a flow develops internally, while selective historical context relates that representation to earlier network activity. Combining these two levels improves flow-level intrusion detection on the source capture. The external tests additionally show that useful discrimination persists on chronological windows from the public CICIDS2017 Wednesday capture and on a separate company server, reaching pooled macro-F1 of 0.8966 and cross-server macro-F1 of 0.9026, respectively. The variation between external windows nevertheless shows that transfer is non-uniform. The main contribution of this thesis is therefore not the use of a Transformer architecture in isolation, but the design and evaluation of a two-stage hierarchical decomposition that explicitly combines these complementary sources of evidence.
+
+% \section{Conclusions}
+% \label{subsec:conclusion_rq_answers}
+
+% \paragraph{RQ1: intra-flow representation.}
+% RQ1 is answered in favour of the time-aware packet sequence. Relative to aggregate flow statistics alone, ordered packet modelling produces a stronger intra-flow representation. Ordinal position and elapsed time contribute distinct information, and a separate statistical conditioning pathway further improves the complete Stage~1 model. The sequence-length sweep qualifies this conclusion: observing more packets does not guarantee better performance.
+
+% \paragraph{RQ2: cross-flow context.}
+% RQ2 is also supported. Selective historical evidence improves on independent flow classification, with source-host context providing the best balanced outcome among the tested relations. Endpoint context instead favours recall while increasing false alerts. Across the evaluated Stage~2 encoders, target-query attention gives the strongest overall result.
+
+% The central contribution is thus not Transformer use in isolation, but an evaluated decomposition of two complementary evidence sources. Temporal structure describes how a flow develops internally; selective context relates that representation to earlier network activity. Combining these levels improves flow-level intrusion detection on the evaluated capture.
+
+\section{Limitations and Scope}
+\label{subsec:conclusion_limitations}
+
+The principal model-development evidence remains based on one organisational source capture with alert-derived binary targets. Label~0 records the absence of a configured Suricata alert, not independently established benignity, and the binary target cannot reveal which attack families benefit from each relation. A fixed seed was used, leaving training variability unestimated. Small margins between neighbouring configurations are consequently descriptive, with no claim of statistical significance \cite{ReimersGurevych2017,Bouthillier2021Variance}. External transfer has been evaluated on public CICIDS2017 Wednesday windows and on a different company server, but this coverage remains limited to two external sources. Their differing collection conditions, class prevalence, attack composition, and label provenance prevent the observed scores from establishing generalisation to arbitrary organisations, time periods, or rulesets.
+
+Causality in Stage~2 is defined by stable flow-start order; historical embeddings are not required to be available before the target begins. In addition, the no-context control is not capacity matched. Freezing Stage~1 clarifies experimental attribution but gives up end-to-end optimisation. Reported Stage~2 latency starts only after embedding and context-index construction, excluding PCAP processing, Suricata extraction, Stage~1 inference, production memory demand, tail latency, and concept drift.
+
+\section{Future Work}
+\label{subsec:conclusion_future_work}
+
+Two methodological directions follow directly from these limitations: resource-efficient Stage~1 pre-training and relation-aware Stage~2 context that adapts to attack behaviour. Either extension should be accompanied by stronger statistical and external validation.
+
+\subsection{Resource-Efficient Self-Supervised Pre-Training}
+\label{subsubsec:future_pretraining}
+
+Stage~1 currently learns only from supervised binary targets, restricting its representation to the signal available in alert-derived labels. Large-scale pre-training was outside the available computational budget. Future work should therefore pre-train the encoder on a broader collection of unlabelled packet and flow records before task-specific fine-tuning. Self-supervision may recover reusable traffic structure without plaintext payloads or labels for every flow
+\cite{2024MAETraffic,Dong2025EncryptedPretrain}.
+
+Several objectives fit the current feature space. Masked packet-feature modelling could reconstruct selected header, direction, length, and timing attributes. Predictive tasks could estimate a subsequent packet's direction, discretised length, or log inter-arrival time. Temporal-order verification would distinguish authentic packet order from perturbations, while contrastive learning could align valid subsequences or augmented views of one flow. Raw addresses, ports, and similar identity fields should be removed or carefully randomised so that pre-training captures behaviour rather than host identity.
+
+Pre-training relocates computation to an offline phase rather than removing it. Mixed precision, gradient accumulation, moderate sequence lengths, shared parameters, and progressive scaling of traffic samples should therefore be investigated. Under equal labelled-data budgets, downstream comparisons should cover random initialisation, linear probing of a frozen encoder, partial fine-tuning, and full fine-tuning. Beyond in-domain macro-F1, evaluation should ask whether pre-training improves label efficiency, rare-attack detection, convergence, and transfer to later or external captures.
+
+\subsection{Attack-Adaptive Relation-Aware Context Modelling}
+\label{subsubsec:future_relation_aware_context}
+
+Stage~2 results demonstrate that context quality is relation dependent. Source-host history gives the best aggregate balance, whereas endpoint history exchanges additional false positives for higher attack recall. A single relation is unlikely to suit every mechanism: scanning may involve one source and many destinations, DDoS many sources and one destination, brute force repeated service interactions, and lateral movement a temporally connected endpoint chain. Context selection should therefore depend on the target and hypothesised behaviour instead of one globally fixed relation.
+
+One extension is a causal pool containing source-host, destination-host, endpoint, protocol, service, subnet, and temporal-neighbour relations. Relation identity could enter through learned embeddings or attention biases; alternatively, separate key--value projections could be combined by a target-conditioned gate. In both cases, eligibility should be limited to embeddings available at decision time, enforced through flow-end or embedding-availability timestamps rather than start order alone. The horizon might also adapt to traffic density by selecting between duration-based and flow-count windows.
+
+Testing this proposal requires attack-family labels or a defensible behavioural grouping beyond the binary target. Per-family recall, FPR, confusion patterns, and relation weights would indicate whether attacks actually draw on different contexts. Appropriate controls include the current single relation, relation-agnostic attention, and parameter-matched multi-relation models. The present CICIDS2017 and cross-server tests should be extended to additional days, public datasets, organisations, and repeated captures. Such tests should mask host identities to prevent apparent relational gains from reflecting machines historically associated with alerts. Learned relation weights may aid diagnosis, but causal interpretation requires relation ablation and counterfactual removal of context.
+
+% \subsection{Statistical and External Validation}
+% \label{subsubsec:future_validation}
+
+% The principal Stage~1 and Stage~2 comparisons should be repeated with at least three to five random seeds. Each run should archive the configuration, validation-selected threshold, checkpoint, test labels, probabilities, and predictions. These aligned outputs would support confidence intervals, paired bootstrap comparisons, McNemar tests, calibration analysis, genuine precision--recall curves, and error-transition analysis between the two stages. The models should then be evaluated on chronologically later captures, unseen hosts, public benchmarks, and, where governance permits, other organisational networks. This would distinguish in-domain performance from temporal, cross-site, and attack-family transfer.
+
+\subsection{Streaming Deployment, Efficiency, and Robustness}
+\label{subsubsec:future_streaming_deployment}
+
+Although the formulation is compatible with online inference, streaming behaviour remains untested. A deployment implementation must maintain bounded buffers for each relation, evict expired entries, process out-of-order records, and define behaviour under packet loss, timestamp noise, missing features, NAT, and highly shared servers. Evaluation should span PCAP processing, Suricata extraction, both learning stages, and alert generation. Alongside predictive metrics, realistic-load tests should report throughput, peak memory, and median, 95th-percentile, and 99th-percentile latency.
+
+\appendix
+\input{appendix_a_complete_features}
+
+\bibliographystyle{unsrt}
+\bibliography{sources}
+
+
+\end{document}

@@ -1,0 +1,104 @@
+[
+  {
+    "title_en": "Title",
+    "title_zh": "标题页",
+    "time": "0:45",
+    "script": "各位老师，早上好。感谢大家参加我的硕士论文答辩。我叫熊晓燕。今天我要介绍的论文题目是《A Hierarchical Time-Aware Transformer for Flow-Level Network Intrusion Detection》。这项工作的核心想法很简单：网络流量本身具有层次结构。多个 packet，也就是数据包，组成一个 flow，也就是网络流；而多个彼此相关的 flow，又可能共同形成更完整的行为模式。因此，我设计了两个彼此区分的阶段。Stage 1 学习一个 flow 内部发生了什么，Stage 2 分析之前的相关 flow 会不会改变我们对当前 flow 的判断。接下来，我会先介绍 packet 和 flow 这两个基础概念，然后说明研究问题、数据、模型和评估方法，最后汇报主要结果、局限性和结论。为了方便大家理解后面的模型，我先从 packet 和 flow 的区别开始。"
+  },
+  {
+    "title_en": "Packet and flow",
+    "title_zh": "Packet 与 Flow",
+    "time": "1:30",
+    "script": "首先介绍两个基础概念。Packet 是网络中一次传输的小型数据单元，可以把它理解成一只信封。每个 packet 通常包含时间戳、源地址、目的地址、协议、长度、方向以及控制标志等信息。但是，一个 packet 只反映一次通信中的一个很小片段。Flow 则是一组属于同一次网络会话的相关 packet。在我的论文中，flow 是双向的，因此既包括从客户端发往服务器的 packet，也包括服务器返回给客户端的 packet。这里有两个信息非常重要：第一是 packet 的先后顺序，第二是相邻 packet 之间的时间间隔。例如，两组 packet 的顺序可能完全相同，但一组在几毫秒内快速完成，另一组却持续几秒，它们代表的行为可能不同。传统的 flow statistics 会把整个会话总结成持续时间、packet 数量、字节数、传输速率以及到达间隔统计等特征。这种表示很紧凑，但是无法完整还原 flow 是怎样一步一步发展的。因此，我的模型同时保留 packet sequence 和 flow-level statistics。理解这两个概念之后，我们就可以进一步说明入侵检测到底面临什么问题。"
+  },
+  {
+    "title_en": "NIDS problem",
+    "title_zh": "网络入侵检测问题",
+    "time": "1:20",
+    "script": "Network Intrusion Detection System，简称 NIDS，用来监控网络流量并识别可疑活动。像 Suricata 这样的规则系统很有价值，因为它的告警容易解释，而且对已知攻击模式通常很有效。机器学习方法希望从数据中进一步学习规则没有直接描述的模式。但关键问题是：应该怎样表示网络流量？Raw packet 能保留较细的细节，可是数据量很大，而且不同 flow 的 packet 数量不同。Flow-level aggregation 很紧凑、处理效率也高，但 packet 顺序、方向变化、突发行为以及不均匀的时间间隔可能会丢失。除此之外，还有第二个问题。很多检测器会单独判断每一个 flow，但扫描、密码猜测、重复连接或者分布式攻击，往往只有把多个相关 flow 放在一起时才会更加明显。所以，这里存在两种信息损失：一种发生在 flow 内部，另一种发生在 flow 之间。正是这两个问题，引出了论文的研究空白和两个研究问题。"
+  },
+  {
+    "title_en": "Research questions",
+    "title_zh": "研究问题",
+    "time": "1:30",
+    "script": "这一页给出了论文的两个研究问题，而且屏幕上的英文使用的是论文原文。RQ1 是：Does time-aware packet-sequence modelling produce more informative flow representations than flow-level aggregation alone? 它关注 flow 内部，也就是带有时间信息的 packet sequence，能不能比只使用聚合统计得到更有信息量的 flow representation。RQ2 是：Does incorporating cross-flow context improve flow-level intrusion detection compared with independent per-flow classification? 它关注 flow 之间，也就是加入 cross-flow context，能不能比独立判断每一个 flow 得到更好的检测结果。整个研究设计也按照这两个问题展开。Stage 1 把有序的 packet sequence 转换成一个 flow embedding，用来回答 RQ1。Stage 2 再把当前 flow 与之前的相关 flow 结合起来，用来回答 RQ2。论文的主要贡献包括：保持 packet-flow 对齐的数据提取流程、time-aware packet encoder、受限制的统计特征调节、target-query context attention，以及按照时间顺序进行的内部和外部评估。下面我先说明这些数据是怎样构建出来的。"
+  },
+  {
+    "title_en": "Dataset and preprocessing",
+    "title_zh": "数据集与预处理",
+    "time": "1:40",
+    "script": "主要数据来自一个大约 8.62 GB 的企业网络 packet capture。我使用 Suricata，并加入了自定义的 C 输出模块。在同一次流量重放过程中，这个模块同时写出 packet CSV 和 flow CSV，并通过共同的 flow identifier 保留 packet 与 flow 的对应关系。原始输出大约包含 1175 万条 packet 记录和 421,898 条 flow 记录。其中只有 16,644 个 flow 属于 class 1，positive proportion 是 3.945%。这种明显的类别不平衡，决定了后面不能只看 accuracy。数据划分严格按照 flow start time 进行：最早的 70% 用于训练，接下来的 10% 用于验证，最后的 20% 用于测试。所有依赖数据分布的处理，例如 clipping、robust scaling 和类别词表，都只在训练集上拟合，避免把未来信息泄漏到训练阶段。这里还必须明确说明标签的限制：class 1 表示该 flow 中至少有一个 packet 触发了配置好的 Suricata alert。因此，这是一种 weak supervision，而不是经过人工独立验证的真实攻击标签。数据接口明确以后，下面来看完整的两阶段框架。"
+  },
+  {
+    "title_en": "Overall framework",
+    "title_zh": "整体框架",
+    "time": "1:10",
+    "script": "这张图概括了整个方法。左侧是 Stage 1。一个 flow 的 packet sequence 进入模型，每个 packet 被表示成一个 token，intra-flow Transformer 再把长度不同的 packet sequence 转换成一个固定长度的 flow embedding。这个 embedding 负责总结一个 flow 是怎样发展的。右侧是 Stage 2。Stage 2 不再处理 raw packet，而是把 Stage 1 输出的 flow embedding 看成新的序列。对于一个 target flow，模型会选择它之前符合关系条件的 flow 作为历史 context，然后输出 target flow 属于 class 1 的概率。这两个 stage 的任务不同，而且按顺序训练。Stage 1 关注一个 flow 内部的表示，Stage 2 关注 flow 之间的上下文。把两者分开，也使实验更容易解释：我们可以先测试 packet representation，再单独测试 context 带来的额外价值。接下来，我先详细介绍 Stage 1 中的 time-aware encoding。"
+  },
+  {
+    "title_en": "Stage 1 time-aware encoding",
+    "title_zh": "Stage 1：时间感知编码",
+    "time": "1:30",
+    "script": "Stage 1 对每一个 flow 最多保留 128 个经过选择的 packet。标准的 positional encoding 只能回答一个问题：这个 packet 在序列中的位置是什么，也就是它是第一个、第二个，还是更后面的 packet。但是，position 本身不能说明真实经过了多少时间。两个相邻 packet 之间可能只相差 8 微秒，也可能相差 2 秒。为了解决这个问题，我又加入了第二个坐标，也就是 cumulative elapsed time。模型先对 packet inter-arrival time 使用对数形式保存，之后在模型中恢复时间间隔、进行累加，再做平滑处理。最后，ordinal position 和 elapsed-time coordinate 一起进入 sinusoidal encoding。这样，模型同时知道 packet 的顺序和实际经过的时间。实验中我比较了 position only、time only、position plus time 和 no encoding 四种设置。这里需要强调：简单地把时间间隔当作一个普通 input feature，与把时间作为 sequence coordinate 并不是同一件事。完成顺序和时间编码以后，Stage 1 还需要把 packet evidence 与 aggregate flow statistics 合理地结合起来。"
+  },
+  {
+    "title_en": "Stage 1 architecture",
+    "title_zh": "Stage 1：Flow 内部表示学习",
+    "time": "1:45",
+    "script": "这一页展示 Stage 1 的详细流程。第一步，选出的 packet features 被映射到 128 维的 model space。第二步，模型加入刚才介绍的 time-aware encoding。第三步，flow-statistics vector 通过一个独立的小型网络进行编码。我的方法不会把同一个 statistics vector 复制到每一个 packet 位置，因为这样可能削弱不同 packet token 之间的差异。相反，编码后的 statistics 只为 packet token 提供一个有边界的 correction。这里使用较小的初始 scale 和最大的 residual ratio，使训练开始时仍然接近 packet-only pathway，而不会让统计特征立即控制整个表示。经过 conditioning 之后，packet sequence 进入带 mask 的 Transformer。Padding 不参与 attention。Stage 1 在完整 flow 内部不是 causal 的，因为每一个保留的 packet 都可以看到同一个 flow 中的其他 packet。最后，我组合三种 pooling：learned attention pooling、mean pooling 和 maximum pooling，得到一个 128 维的 flow embedding。这个 embedding 在 Stage 1 最终分类器之前导出，并成为 Stage 2 的输入。也就是说，Stage 1 到这里完成了 flow 内部的表示学习，下面进入任务不同的 Stage 2。"
+  },
+  {
+    "title_en": "Stage 2 architecture",
+    "title_zh": "Stage 2：Flow 之间的上下文建模",
+    "time": "1:45",
+    "script": "Stage 2 操作的是 flow embedding，而不是 raw packet。对于每一个 target flow，我先收集在时间上更早、并且满足关系条件的 flow。实验比较四种 relation policy。Source-host context 选择由同一个 source 发起的历史 flow；destination-host context 选择发往同一个 destination 的历史 flow；endpoint context 允许任意一个 endpoint 匹配；time-only context 则只按时间选择最近的全局 flow。当前的 target flow 放在最后一个有效位置，并提供一个 query；历史 flow embeddings 提供 keys 和 values。Attention 的输出就是与当前 flow 最相关的历史摘要。之后，learned gate 决定这个摘要应该在多大程度上更新当前 flow representation。整个过程中不会使用 future embedding，也不会使用历史 flow 的 label，而且 padding 会被 mask。这里我对 causal 这个词使用得比较谨慎。当前实现按照稳定的 flow-start order 保持因果顺序，但它并不要求一个较早开始、持续时间很长的 flow 必须在 target flow 开始之前已经结束。因此，它还不是严格按照 embedding availability 运行的实时 streaming system。介绍完两个 stage 后，下面先说明模型和 threshold 是如何评估的。"
+  },
+  {
+    "title_en": "Evaluation protocol",
+    "title_zh": "评估方案",
+    "time": "1:25",
+    "script": "由于 class 1 很少，accuracy 可能产生误导。在原始数据中，如果模型把所有 flow 都预测成 negative，accuracy 仍然可以达到大约 96.1%，但它一个 positive flow 也检测不到。因此，我重点报告 macro-F1、PR-AUC、class-1 F1、false-positive rate，以及 false positive 和 false negative 的绝对数量。Macro-F1 对两个类别给予同等权重。PR-AUC 衡量模型在不同 threshold 下对 positive class 的排序能力。Class-1 F1 则描述选定 operating point 下 precision 和 recall 的平衡。模型选择分三步进行。第一，根据 validation PR-AUC 选择 checkpoint。第二，根据 validation class-1 F1 选择 decision threshold。第三，把固定的 checkpoint 和 threshold 应用于完全没有参与选择的 chronological test set。同一个 comparison block 中的所有模型都使用相同的数据 manifest 和 preprocessing state。明确这个评估方案以后，下面先通过 Stage 1 的结果回答 RQ1。"
+  },
+  {
+    "title_en": "Stage 1 model results",
+    "title_zh": "Stage 1 结果：Position 与 Time",
+    "time": "1:35",
+    "script": "这张图在相同的 test manifest 上比较 Stage 1 的不同模型和 encoding variant。Position plus time Transformer 得到了最好的综合平衡，macro-F1 为 0.8882，PR-AUC 为 0.8564。它优于只使用 flow statistics 的 MLP，也优于 LSTM、GRU、BiLSTM、CNN 以及 no-encoding Transformer。与 flow MLP 的比较尤其重要，因为它直接检验 packet sequence 是否提供了 aggregation 之外的信息。两者的 macro-F1 相差大约 0.112。再看 encoding control，time only 的结果高于 position only，而 position 与 time 结合又高于只使用其中一个。这说明顺序和真实时间并不是重复信息，而是具有互补价值。因此，对 RQ1 的主要回答是肯定的：与只使用 flow-level aggregation 相比，time-aware packet-sequence modelling 能够产生更有信息量的 flow representation。接下来的实验进一步考察 aggregate statistics 应该怎样加入这个 packet representation。"
+  },
+  {
+    "title_en": "Stage 1 fusion results",
+    "title_zh": "Stage 1 结果：统计特征融合",
+    "time": "1:30",
+    "script": "这项 ablation 比较三种 statistics integration scheme。Scheme A 把同一个 statistical flow vector 复制到每一个 packet position。Scheme B 完全删除 statistical branch，只使用 packet。Scheme C 是提出的方法：statistics 只编码一次，然后通过 bounded token modulation 调节 packet pathway。结果中，Scheme B 已经优于 Scheme A，说明重复加入同一个 aggregate vector 可能会干扰 packet token 之间的差异。Scheme C 的结果最好，macro-F1 为 0.8954，PR-AUC 为 0.8763，同时产生 267 个 false positive 和 293 个 false negative。与 packet-only scheme 相比，这两种错误数量都更低。因此，一个谨慎的结论是：aggregate statistics 仍然包含有价值的全局信息，但更合适的方式是让它调节 packet representation，而不是在每个位置简单复制。我不会把全部提升都归因于 modulation operation，因为 Scheme C 的模型容量也发生了变化。在确定 Stage 1 representation 以后，下面进入 RQ2 和 Stage 2 的 context 结果。"
+  },
+  {
+    "title_en": "Stage 2 relation results",
+    "title_zh": "Stage 2 结果：历史关系选择",
+    "time": "1:30",
+    "script": "这个实验固定 Stage 2 模型和 context capacity，只改变选择历史 flow 的 relation。Source-host history 得到了最好的综合平衡，macro-F1 为 0.9275，PR-AUC 为 0.9345，class-1 recall 大约为 0.8503，而且在这些 relation 中具有最低的 false-positive rate，也就是 0.5429%。Endpoint context 的 class-1 recall 更高，说明它漏掉的 positive flow 更少，但同时也产生了更多 false positive。Destination history 和 global time-only history 的整体结果较弱。一个可能的解释是，同一个 source 的重复 outbound activity 更容易保留扫描、重试或协调连接等行为模式。但是，这里只能把它作为可能的机制，而不能当作已经证明的原因。因为当前标签只有 binary class，无法告诉我们具体是哪些 attack family 带来了提升。在 source-host context 被选为最佳 relation 以后，下一页会在相同的 history 上比较不同 Stage 2 architecture。"
+  },
+  {
+    "title_en": "Stage 2 architecture results",
+    "title_zh": "Stage 2 结果：模型架构比较",
+    "time": "1:35",
+    "script": "这张图比较 proposed target-query model、no-context head、vanilla Transformer、LSTM、GRU 和 CNN plus LSTM。为了保证比较一致，Stage 1 embeddings、source-host histories、window size、training objective、checkpoint rule 和 threshold protocol 都保持不变。提出的方法得到最好的综合结果：macro-F1 为 0.9275，class-1 F1 为 0.8610，PR-AUC 为 0.9345。与 vanilla Transformer 相比，在相同的 test flows 上，它减少了 177 个 false positive 和 117 个 false negative。这说明 macro-F1 的提高并不是简单地用一种错误交换另一种错误。这个设计让 current flow 始终作为 query，并把 historical context 看作一个 gated correction。不过，这个结论也需要保留边界。No-context head 的参数量明显更小，其他 architecture 也没有做到完全 parameter matched。因此，实验支持完整的 target-query design，但还不能把提升精确归因到每一个单独组件。最后一个性能问题是：这个模型能否迁移到 source capture 以外的数据。"
+  },
+  {
+    "title_en": "External evaluation",
+    "title_zh": "外部评估",
+    "time": "1:45",
+    "script": "外部评估完全使用在 source data 上训练得到的 checkpoint、preprocessing state 和 validation threshold。外部数据的 label 不用于重新训练，也不用于模型选择。第一个外部数据是 CICIDS2017 Wednesday capture。我使用五个互不重叠、每个包含 20,000 个 flow 的窗口。表格列出了每个窗口的 positive proportion，范围从 13.340% 到 18.195%，五个窗口合并后的比例是 15.353%。各窗口的 macro-F1 从 0.8536 到 0.9226，pooled macro-F1 是 0.8966。这里的窗口差异很重要：它说明模型能够迁移，但在不同时间窗口上的效果并不完全相同。第二个外部数据来自另一台 company server，共包含 38,513 个 flow，positive proportion 只有 3.285%。在这个数据上，macro-F1 为 0.9026，PR-AUC 为 0.8771。这些结果说明在当前 pipeline 下存在有用的 transfer signal，但两个外部来源仍然不足以证明 universal generalisation。下面我会把主要结论和证据边界放在一起总结。"
+  },
+  {
+    "title_en": "Conclusions and limitations",
+    "title_zh": "结论与局限性",
+    "time": "1:45",
+    "script": "综合实验结果，可以得到四个主要结论。第一，在一个 flow 内部，packet position 和 cumulative elapsed time 提供互补信息。第二，aggregate flow statistics 仍然有价值，但更适合用来 condition packet representation，而不是取代 packet sequence。第三，选择性的 source-host history 能够使当前测试中的检测器优于 independent per-flow classification，因此 RQ2 也得到了肯定的实验回答。第四，在 public dataset 和 cross-server evaluation 中，模型仍然保留了有用的区分能力，但具体 performance 和 error balance 会变化。同时，论文的边界也很重要。标签来自 Suricata alert，并不是独立验证的 attack ground truth。Stage 2 按 start time 排序，但还不满足严格的 completion-time streaming。实验只使用一个固定 random seed，所以较小差异不能被解释为 statistical significance。外部数据只覆盖两个来源，也不能证明模型在所有网络环境中都能迁移。未来工作应该包括 repeated seeds、parameter-matched no-context control、attack-family labels、严格的 embedding-availability timing，以及更广泛的 external test。最后，我用一句话总结整项工作。"
+  },
+  {
+    "title_en": "Takeaway",
+    "title_zh": "核心总结",
+    "time": "0:35",
+    "script": "这项研究最重要的结论是：网络流量具有层次结构，因此检测器也应该尊重这个结构。Stage 1 通过 packet 的顺序、方向和时间，表示一个 flow 是怎样发展的；Stage 2 则说明之前的相关 flow 会怎样改变当前 flow 的含义。这两个 stage 解决不同层次的信息损失，并且在当前评估中表现出互补价值。论文的贡献不只是使用了 Transformer，而是设计并系统评估了一个把 packet-level timing 与 selective flow-level context 连接起来的两阶段方法。我的汇报到这里结束。非常感谢各位老师的聆听，我愿意回答大家的问题。"
+  }
+]
