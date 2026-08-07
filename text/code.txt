@@ -1,0 +1,220 @@
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.trainers import BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import BigBirdConfig, BigBirdModel
+from transformers import PreTrainedTokenizerFast
+import torch
+from tokenizers.models import WordLevel
+from tokenizers.trainers import WordLevelTrainer
+from tokenizers.pre_tokenizers import Whitespace
+import os
+import random
+import numpy as np
+import redis.asyncio as redis
+import json
+import torch.nn as nn
+import asyncio
+import redis.asyncio as redis
+import nest_asyncio
+from threading import Thread
+from collections import deque
+import streamlit as st
+import time
+import joblib
+from streamlit_autorefresh import st_autorefresh
+from sqlalchemy import create_engine, text
+redis_ip = '0.0.0.0'
+redis_port = 6379
+
+
+seed = 42
+
+os.environ["PYTHONHASHSEED"] = str(seed)
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+random.seed(seed)
+np.random.seed(seed)
+
+import torch
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
+config = BigBirdConfig(
+    vocab_size = 261,
+    hidden_size = 32,
+    num_attention_heads = 4,
+    num_hidden_layers = 4,
+    max_position_embeddings = 4096
+)
+model = BigBirdModel(config)
+
+def remove_dropout(model):
+    for name, module in model.named_children():
+        if isinstance(module, nn.Dropout):
+            setattr(model, name, nn.Identity())
+        else:
+            remove_dropout(module)
+    return model
+
+model = remove_dropout(model)
+with open("random_forest.pkl","rb") as rf:
+     random_forest = joblib.load(rf)
+
+header_tokenizer = PreTrainedTokenizerFast(tokenizer_file="header_tok.json")
+header_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+payload_tokenizer = PreTrainedTokenizerFast(tokenizer_file="payload_tok.json")
+payload_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+def create_string_embedding(header, payload, model,header_tokenizer, payload_tokenizer):
+    header = header.lower()
+    payload = payload.lower()
+    inputs_header = header_tokenizer(header,return_tensors="pt",truncation=True, padding=True,max_length = 4096)
+    inputs_payload = payload_tokenizer(payload,return_tensors="pt",truncation=True, padding=True,max_length = 4096)
+
+    with torch.no_grad():
+
+        outputs_header = model(**inputs_header)
+        outputs_payload = model(**inputs_payload)
+
+        cls_header = outputs_header.last_hidden_state[:,0,:]
+        cls_payload = outputs_payload.last_hidden_state[:,0,:]
+
+    return torch.cat([cls_header, cls_payload], dim=0).flatten().cpu().numpy()
+
+async def make_prediction(name):
+    REDIS_URL = os.getenv("REDIS_URL", "redis://0.0.0.0:6379")
+    pool = redis.ConnectionPool.from_url(REDIS_URL)
+    redis_client = redis.Redis(connection_pool=pool)
+#    await redis_client.xgroup_create("suricata:packets", "redis-consumers")
+    stream = "suricata:packets"
+
+
+    try:
+        data = await redis_client.xreadgroup("redis-consumers", name, streams = {stream:'>'},
+        count=10,block=5000)
+
+        for key, value in data:
+            for i, j in value:
+                 text = j.get(b'alert')
+                 res = json.loads(text)
+                 payload = res.pop("Payload")
+                 header = res
+                 emb = create_string_embedding(str(header), str(payload), model, header_tokenizer, payload_tokenizer)
+                 copy = emb.tolist()
+                 emb = emb.reshape(1,-1)
+                 pred = random_forest.predict(emb)
+                 return {
+                     "src" : header.get("Source IP",  "N/A"),
+                     "dst" : header.get("Destination IP",  "N/A"),
+                     "emb" : copy,
+                     "label" : int(pred),
+                 }
+#    return f"src: {src_ip}, dst: {dst_ip}, prediction: {pred}"
+    except Exception as e:
+            if "BUSYGROUP" in str(e):
+                pass
+            else:
+                raise
+dqueue = deque()
+async def main(dq):
+    consumers = ["c1", "c2", "c3"]
+    while True:
+          res = await asyncio.gather(*(make_prediction(name) for name in consumers))
+          for r in res:
+              dq.appendleft(r)
+          await asyncio.sleep(1)
+
+def runner(dq):
+    asyncio.run(main(dq))
+
+if "live_dq" not in st.session_state:
+    st.session_state.live_dq = dqueue
+if "thread_started" not in st.session_state:
+    t = Thread(target=runner, args=(dqueue,), daemon=True)
+    t.start()
+    st.session_state.thread_started = True
+
+
+def send_data(prediction):
+    DATABASE_URL = "postgresql+psycopg2://user:password@0.0.0.0:5000/offline-vector"
+    engine = create_engine(
+         DATABASE_URL,
+         echo=False,
+         pool_pre_ping=True
+)
+    with engine.begin() as conn:
+       conn.execute(
+            text("INSERT INTO data (label, embedding) VALUES (:label, :embedding)"),
+            {"label": prediction["label"], "embedding": prediction["emb"]}
+    )
+
+def update_label(prediction):
+    if prediction["label"] == 0:
+       prediction["label"] == 1
+    else:
+       prediction["label"] == 0
+
+st.title("Suricata Predictions")
+
+st.markdown( """
+<style>
+.outer-scroll-box {
+    border: 2px solid #63e6c4;
+    border-radius: 16px;
+    background: #f9f9f9;
+    padding: 18px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+.prediction-box {
+    border: 1px solid #63e6c4;
+    border-radius: 12px;
+    padding: 10px 16px;
+    margin-bottom: 12px;
+    background: #f7f7f7;
+    font-size: 15px;
+}
+</style>
+""" ,unsafe_allow_html = True)
+with st.container():
+    # st.markdown('<div class="outer-scroll-box">', unsafe_allow_html = True)
+     for idx, pred in enumerate(list(st.session_state.live_dq)):
+        with st.container(border = True):
+           if pred is None:
+              st.markdown(f'<div class="prediction-box"> Empty prediction</div>', unsafe_allow_html=True)
+           else:
+              st.markdown(f'<div class="prediction-box"> {pred.get("src", "N/A")}, {pred.get("dst", "N/A")}, {pred.get("label","")}</div>', unsafe_allow_html=True)
+              col1, col2 = st.columns(2)
+              with col2:
+                   col3, col4 = st.columns(2)
+                   with col3:
+                        btn_update = st.button("Update label",key = f"update_{hash(pred.get("src", "N/A")) + idx}", on_click = update_label, args = (pred,))
+                   with col4:
+                        btn_send = st.button("Send to database",key = f"send_{hash(pred.get("src", "N/A")) + idx}", on_click = send_data, args = (pred,))
+
+    # Rerun only if updates occurred
+st_autorefresh(interval = 1000)
+
+    # st.markdown('</div>' , unsafe_allow_html = True)
+# Add each prediction as its own box
+#for pred in st.session_state.live_deque:
+ #   outer_box_html += f'<div class="prediction-box">{pred}</div>'
+  #  with st.container():
+   # col1, col2 = st.columns(2)
+    # with col1:
+     #    btn_update =  st.button("update label")
+     #with col2:
+      #   btn_send = st.button("send to database", on_click = send_data)
+# outer_box_html += "</div>"
+
+# Display in Streamlit
+# st.html(outer_box_html)
+# with st.container():
+     #col1, col2 = st.columns(2)
+    # with col1:
+       #  btn_update =  st.button("update label")
+     # with col2:
+        # btn_send = st.button("send to database", on_click = send_data)

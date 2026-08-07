@@ -1,0 +1,6 @@
+alert udp ![$SMTP_SERVERS,$DNS_SERVERS] any -> $DNS_SERVERS 53 (msg:"ET DNS DNS Lookup for localhost.DOMAIN.TLD"; content:"|01|"; offset:2; depth:1; content:"|00 01 00 00 00 00 00|"; distance:1; within:7; content:"|09|localhost"; fast_pattern; nocase; classtype:bad-unknown; sid:2011802; rev:6; metadata:created_at 2010_10_13, confidence Medium, signature_severity Major, updated_at 2019_09_03;)
+alert tcp !$SMTP_SERVERS any -> !$HOME_NET 25 (msg:"ET INFO Outbound Multiple Non-SMTP Server Emails"; flow:established; content:"mail from|3a|"; nocase; threshold: type threshold, track by_src, count 10, seconds 120; classtype:misc-activity; sid:2000328; rev:12; metadata:created_at 2010_07_30, confidence High, signature_severity Informational, updated_at 2019_07_26;)
+alert tcp !$HOME_NET any -> $HOME_NET 25 (msg:"ET INFO Inbound Frequent Emails - Possible Spambot Inbound"; flow:established; content:"mail from|3a|"; nocase; threshold: type threshold, track by_src, count 10, seconds 60; classtype:misc-activity; sid:2002087; rev:10; metadata:created_at 2010_07_30, confidence Medium, signature_severity Informational, updated_at 2019_07_26;)
+3 rules failed。这就是失败的三条rule。请帮我详细解析三条规则。
+
+Info: detect: 1 rule files processed. 43871 rules successfully loaded, 3 rules failed, 0 rules skipped [SigLoadSignatures:detect-engine-loader.c:473]

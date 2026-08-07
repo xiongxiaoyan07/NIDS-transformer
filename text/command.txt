@@ -1,0 +1,88 @@
+# 1. 停止网卡
+sudo ip link set dummy down
+
+# 2. 启动网卡
+sudo ip link set dummy up
+
+# 3. 再次运行 Suricata
+cd /home/xxiong/oisf/suricata/
+AF_PACKET（实时模式）
+sudo suricata -c /home/xxiong/oisf/suricata/suri2.yaml -i dummy --af-packet
+
+Offline 模式 运行，这样 Suricata 就会强制从 PCAP 文件头部读取时间戳给 p->ts，而不是去问 Linux 内核。
+# 停止 tcpreplay，直接让 suricata 读文件
+sudo suricata -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/firewall_test_20250731_160700.pcap
+
+#4. 回放 PCAP 流量进行标注
+cd /home/xxiong/pcaps/
+
+sudo tcpreplay -i dummy pbx20.all.20260302_104500.pcap 
+
+cd /home/xxiong/my_plugin
+make
+make clean
+
+ls -l -h /home/xxiong/pcaps
+ls -l -h /var/log/suricata
+
+sudo rm -f /var/log/suricata/eve.json
+sudo rm -f /home/xxiong/pcaps/stage1_flows.csv
+sudo rm -f /home/xxiong/pcaps/stage1_packets.csv
+
+
+1）配置测试
+sudo suricata -T -c /home/xxiong/oisf/suricata/suri2.yaml
+
+2）离线跑 pcap
+sudo suricata -c /home/xxiong/oisf/suricata/suri2.yaml -r /home/xxiong/pcaps/pbx23_20260512_001.pcap
+
+既然你想把文件从 VM 下载到本机 (Windows)，你应该打开 Windows 的 PowerShell 或 CMD，然后在 Windows 下运行 scp 命令：
+1. 打开 Windows 的 PowerShell (不要在 VM 里)
+2. 运行以下命令：
+PowerShell
+从 VM -> 本地：在本地运行 scp (拉取) 或在本地使用 WinSCP 工具
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/custom-nids-features.json C:\Users\XiaoyanXiong\Desktop\NIDS
+scp xxiong@136.144.177.139:/var/log/suricata/eve.json C:\Users\XiaoyanXiong\Desktop\NIDS
+ 
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/benign_ok.json C:\Users\XiaoyanXiong\Desktop\pcode\
+scp xxiong@136.144.177.139:/home/xxiong/structure.html C:\Users\XiaoyanXiong\Desktop\pcode\
+scp xxiong@136.144.177.139:/var/lib/suricata/rules/suricata.rules C:\Users\XiaoyanXiong\Desktop\pcode\
+scp xxiong@136.144.177.139:/var/lib/suricata/rules/classification.config C:\Users\XiaoyanXiong\Desktop\pcode\
+
+scp xxiong@136.144.177.139:/home/xxiong/my_plugin/custom-out.c C:\Users\XiaoyanXiong\Desktop\NIDS\old
+
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/stage1_flows.csv C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset\
+scp xxiong@136.144.177.139:/home/xxiong/pcaps/stage1_packets.csv C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset\
+scp xxiong@136.144.177.139:/var/log/suricata/eve.json C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\dataset\
+
+
+
+从本地 -> VM：在本地运行 scp
+scp C:\Users\XiaoyanXiong\Desktop\pcaps\dataset_20260511\pbx23_20260512_001.pcap xxiong@136.144.177.139:/home/xxiong/pcaps
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\suricata-plugin\custom-out.c xxiong@136.144.177.139:/home/xxiong/my_plugin
+scp C:\Users\XiaoyanXiong\Desktop\pcode\suri2.yaml xxiong@136.144.177.139:/home/xxiong/oisf/suricata/
+scp C:\Users\XiaoyanXiong\Desktop\pcode\pcaps\flow.py xxiong@136.144.177.139:/home/xxiong/app
+
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\pcaps\Wednesday-workingHours.pcap xxiong@136.144.177.139:/home/xxiong/pcaps
+
+
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\suricata-plugin\suri2.yaml xxiong@136.144.177.139:/home/xxiong/oisf/suricata
+scp C:\Users\XiaoyanXiong\Desktop\NIDSTransformer\suricata-plugin\custom-out.c xxiong@136.144.177.139:/home/xxiong/my_plugin
+
+scp C:\Users\XiaoyanXiong\Desktop\NIDS\suricata-plugin\custom-out.c xxiong@136.144.177.139:/home/xxiong/my_plugin
+
+
+
+
+sudo cp -r /home/atoma/pcaps/benign_ok.json /home/xxiong/pcaps              
+
+ps aux | grep suricata   检查是否启动了suricata
+
+--如果想在虚拟机上运行python 代码。
+--进入到app目录下
+Log in to the VM and go to the app directory
+cd app
+--激活python虚拟环境，这里有各种包的依赖
+Activate the virtual environment (for python libraries)
+source venv/bin/activate 
+--pip install 也在这个命令之后

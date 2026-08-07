@@ -1,0 +1,161 @@
+#include "suricata-common.h"
+#include "suricata-plugin.h"
+#include "output-packet.h"
+#include "output-flow.h"
+#include "output-tx.h"
+#include "util-print.h"
+#include "output.h"
+#include "jansson.h"
+#include "decode.h"
+#include "decode-ipv4.h"
+#include "decode-ipv6.h"
+#include "decode-tcp.h"
+#include "decode-udp.h"
+#include "util-misc.h"
+#include <stdio.h>
+#include <pthread.h>
+
+#define CUSTOM_PACKET_LOG_FILE "/home/atoma/pcaps/custom-packet.json"
+static pthread_mutex_t tdata_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct {
+    FILE *fp;
+} CustomLoggerThreadData;
+
+static TmEcode ThreadInit(ThreadVars *tv, const void *initdata, void **data)
+{
+    CustomLoggerThreadData *tdata = SCMalloc(sizeof(CustomLoggerThreadData));
+    if (!tdata) {
+        SCLogError("Could not allocate thread data for custom packet logger");
+        return TM_ECODE_FAILED;
+    }
+    tdata->fp = fopen(CUSTOM_PACKET_LOG_FILE, "a");
+    if (!tdata->fp) {
+        SCLogError("Could not open file %s for writing", CUSTOM_PACKET_LOG_FILE);
+        SCFree(tdata);
+        return TM_ECODE_FAILED;
+    }
+    *data = tdata;
+    return TM_ECODE_OK;
+}
+
+static TmEcode ThreadDeInit(ThreadVars *tv, void *data)
+{
+    CustomLoggerThreadData *tdata = data;
+    if (tdata && tdata->fp) {
+        fclose(tdata->fp);
+        tdata->fp = NULL;
+    }
+    SCFree(tdata);
+    return TM_ECODE_OK;
+}
+
+static json_t* CustomPacketJsonLogger(ThreadVars *tv, void *thread_data, const Packet *p)
+{
+    CustomLoggerThreadData *tdata = thread_data;
+    json_t* p_object = json_object();
+    char src_ip[46] = {0}, dst_ip[46] = {0};
+
+    if (PacketIsIPv4(p)) {
+        const IPV4Hdr* ipv4 = PacketGetIPv4(p);
+        PrintInet(AF_INET, (const void*)&(p->src.addr_data32[0]), src_ip, sizeof(src_ip));
+        PrintInet(AF_INET, (const void*)&(p->dst.addr_data32[0]), dst_ip, sizeof(dst_ip));
+        json_object_set_new(p_object, "Header Length", json_integer(IPV4_GET_RAW_HLEN(ipv4)));
+        json_object_set_new(p_object, "Source IP", json_string(src_ip));
+        json_object_set_new(p_object, "Destination IP", json_string(dst_ip));
+        json_object_set_new(p_object, "Protocol", json_integer(ipv4->ip_proto));
+        json_object_set_new(p_object, "ToS", json_integer(ipv4->ip_tos));
+        json_object_set_new(p_object, "Length", json_integer(ipv4->ip_len));
+        json_object_set_new(p_object, "TTL", json_integer(ipv4->ip_ttl));
+        json_object_set_new(p_object, "Checksum", json_integer(ipv4->ip_csum));
+        json_object_set_new(p_object, "IP Version", json_integer(4));
+        if (p->l4.hdrs.tcph != NULL) {
+            TCPHdr* tcp = p->l4.hdrs.tcph;
+            json_object_set_new(p_object, "Source Port", json_integer(SCNtohs(tcp->th_sport)));
+            json_object_set_new(p_object, "Destination Port", json_integer(SCNtohs(tcp->th_dport)));
+        }
+        if (p->l4.hdrs.udph != NULL) {
+            UDPHdr* udp = p->l4.hdrs.udph;
+            json_object_set_new(p_object, "Source Port", json_integer(SCNtohs(udp->uh_sport)));
+            json_object_set_new(p_object, "Destination Port", json_integer(SCNtohs(udp->uh_dport)));
+        }
+    }
+    if (PacketIsIPv6(p)) {
+        const IPV6Hdr* ipv6 = PacketGetIPv6(p);
+        PrintInet(AF_INET6, (const void*)&(p->src.addr_data32[0]), src_ip, sizeof(src_ip));
+        PrintInet(AF_INET6, (const void*)&(p->dst.addr_data32[0]), dst_ip, sizeof(dst_ip));
+        json_object_set_new(p_object, "Header Length", json_integer(40));
+        json_object_set_new(p_object, "Source IP", json_string(src_ip));
+        json_object_set_new(p_object, "Destination IP", json_string(dst_ip));
+        json_object_set_new(p_object, "Next Header", json_integer(ipv6->ip6_hdrun.ip6_un1.ip6_un1_nxt));
+        json_object_set_new(p_object, "Traffic Class", json_integer(((ipv6->ip6_hdrun.ip6_un1.ip6_un1_flow) >> 20) & 0xFF));
+        json_object_set_new(p_object, "Payload Length", json_integer(ipv6->ip6_hdrun.ip6_un1.ip6_un1_plen));
+        json_object_set_new(p_object, "Hop Limit", json_integer(ipv6->ip6_hdrun.ip6_un1.ip6_un1_hlim));
+        json_object_set_new(p_object, "IP Version", json_integer(6));
+        if (p->l4.hdrs.tcph != NULL) {
+            TCPHdr* tcp = p->l4.hdrs.tcph;
+            json_object_set_new(p_object, "Source Port", json_integer(SCNtohs(tcp->th_sport)));
+            json_object_set_new(p_object, "Destination Port", json_integer(SCNtohs(tcp->th_dport)));
+        }
+        if (p->l4.hdrs.udph != NULL) {
+            UDPHdr* udp = p->l4.hdrs.udph;
+            json_object_set_new(p_object, "Source Port", json_integer(SCNtohs(udp->uh_sport)));
+            json_object_set_new(p_object, "Destination Port", json_integer(SCNtohs(udp->uh_dport)));
+        }
+    }
+    if (p->payload && p->payload_len > 0) {
+        size_t hex_len = p->payload_len * 2 + 1;
+        char* hex = SCMalloc(hex_len);
+        if (hex) {
+            PrintHexString(hex, hex_len, p->payload, p->payload_len);
+            json_object_set_new(p_object, "Payload", json_string(hex));
+            SCFree(hex);
+        } else {
+            json_object_set_new(p_object, "Payload", json_null());
+        }
+    } else {
+        json_object_set_new(p_object, "Payload", json_null());
+    }
+    if (p->alerts.cnt > 0) {
+        json_object_set_new(p_object, "label", json_integer(1));
+    } else {
+        json_object_set_new(p_object, "label", json_integer(0));
+    }
+
+    if (tdata && tdata->fp) {
+        char *json_str = json_dumps(p_object, 0);
+        if (json_str) {
+            pthread_mutex_lock(&tdata_mutex);
+            fprintf(tdata->fp, "%s\n", json_str);
+            fflush(tdata->fp);
+            pthread_mutex_unlock(&tdata_mutex);
+            free(json_str);
+        }
+    }
+
+    return p_object;
+}
+
+static bool CustomPacketLoggerCondition(ThreadVars *tv, void *thread_data, const Packet *)
+{
+    return true;
+}
+static void Init(void)
+{
+    SCOutputRegisterPacketLogger(LOGGER_USER, "custom-packet-logger", CustomPacketJsonLogger,
+                                 CustomPacketLoggerCondition, NULL, ThreadInit, ThreadDeInit);
+}
+
+const SCPlugin PluginRegistration = {
+        .version = SC_API_VERSION,
+        .suricata_version = SC_PACKAGE_VERSION,
+        .name = "custom-packet-logger",
+        .plugin_version = "1.0.0",
+        .author = "A",
+        .license = "GPLv2",
+        .Init = Init,
+};
+
+const SCPlugin *SCPluginRegister(void) {
+    return &PluginRegistration;
+}

@@ -1,0 +1,39 @@
+# === Configuration ===
+PLUGIN_NAME      := custom-out
+SRCS             := $(PLUGIN_NAME).c
+OBJS             := $(SRCS:.c=.o)
+OUT              := $(PLUGIN_NAME).so
+
+# Path to your Suricata build tree
+SURICATA_SRC     := /home/atoma/oisf/suricata
+
+# Path to libsuricata-config — guarantees version match!
+LIBSURICATA_CONFIG := $(SURICATA_SRC)/libsuricata-config
+
+# Compiler and flags
+CC               := gcc
+CFLAGS           := -Wall -Wextra -fPIC
+
+# Combine libsuricata-config flags + your explicit include paths
+CPPFLAGS         := `$(LIBSURICATA_CONFIG) --cflags`
+CPPFLAGS         += -DSURICATA_PLUGIN
+CPPFLAGS         += -I$(SURICATA_SRC)/src
+CPPFLAGS         += -I$(SURICATA_SRC)
+CPPFLAGS         += -I.
+
+LDFLAGS          := -shared
+
+# === Build Rules ===
+all: $(OUT)
+
+$(OUT): $(OBJS)
+        $(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
+%.o: %.c
+        $(CC) $(CFLAGS) $(CPPFLAGS) -D__SCFILENAME__=\"$<\" -c -o $@ $<
+
+clean:
+        rm -f *.o *.so *~
+
+format:
+        clang-format -i $(SRCS)
