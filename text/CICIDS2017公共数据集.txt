@@ -1,0 +1,26 @@
+CICIDS2017完全不是公司内部的数据集，而是网上提供的公共数据集。
+CICIDS2017 数据集中的Wednesday, July 5, 2017这天的数据集（Wednesday-workingHours）Create multiple non-overlapping, chronological Stage1 external-test pairs. flows_per_window = 20000
+ar002_et12_20260511_001这个数据集用于训练和Wednesday-workingHours这个数据集用于外部测试,看运行结果
+external_Wednesday_workingHour_w01
+[TEST] Full metrics: {'accuracy': 0.9478, 'macro_precision': 0.9117047149155886, 'macro_recall': 0.9132859881890929, 'macro_f1': 0.912492597074879, 'weighted_precision': 0.9479024302587923, 'weighted_recall': 0.9478, 'weighted_f1': 0.9478500262321042, 'precision_label1': 0.8547990155865464, 'recall_label1': 0.8590272052761748, 'f1_label1': 0.8569078947368421, 'auc': 0.9816462109649925, 'pr_auc': 0.9088162432022562, 'per_class_f1': {'0': 0.9680772994129159, '1': 0.8569078947368421}, 'confusion_matrix': [[15830, 531], [513, 3126]], 'num_classes': 2, 'num_samples': 20000, 'loss': 0.08718816034980119, 'positive_count': 3639, 'positive_rate': 0.18195}
+
+external_Wednesday_workingHour_w02 
+[TEST] Full metrics: {'accuracy': 0.9636, 'macro_precision': 0.9201402019015443, 'macro_recall': 0.9251107359401081, 'macro_f1': 0.9226037723941944, 'weighted_precision': 0.9638275068642708, 'weighted_recall': 0.9636, 'weighted_f1': 0.9637070250514578, 'precision_label1': 0.8602699744618753, 'recall_label1': 0.8723640399556049, 'f1_label1': 0.8662747979426892, 'auc': 0.9728137874423917, 'pr_auc': 0.9123266972816622, 'per_class_f1': {'0': 0.9789327468456998, '1': 0.8662747979426892}, 'confusion_matrix': [[16914, 383], [345, 2358]], 'num_classes': 2, 'num_samples': 20000, 'loss': 0.08845344604994171, 'positive_count': 2703, 'positive_rate': 0.13515}
+
+
+external_Wednesday_workingHour_w06
+[TEST] Full metrics: {'accuracy': 0.92995, 'macro_precision': 0.9252000461056542, 'macro_recall': 0.8097528526392144, 'macro_f1': 0.8536048252225783, 'weighted_precision': 0.9293147496730008, 'weighted_recall': 0.92995, 'weighted_f1': 0.9244790274946596, 'precision_label1': 0.91906236178682, 'recall_label1': 0.6304611650485437, 'f1_label1': 0.7478855497570631, 'auc': 0.9758162650129729, 'pr_auc': 0.890644232039029, 'per_class_f1': {'0': 0.9593241006880934, '1': 0.7478855497570631}, 'confusion_matrix': [[16521, 183], [1218, 2078]], 'num_classes': 2, 'num_samples': 20000, 'loss': 0.08560779412984848, 'positive_count': 3296, 'positive_rate': 0.1648}
+
+external_Wednesday_workingHour_w07 
+[TEST] Full metrics: {'accuracy': 0.93575, 'macro_precision': 0.856631949947048, 'macro_recall': 0.8717590345145914, 'macro_f1': 0.8639550555357431, 'weighted_precision': 0.937234081805912, 'weighted_recall': 0.93575, 'weighted_f1': 0.9364171014868657, 'precision_label1': 0.7466999643239386, 'recall_label1': 0.7844827586206896, 'f1_label1': 0.7651252056296838, 'auc': 0.96909518570394, 'pr_auc': 0.8419498323922726, 'per_class_f1': {'0': 0.9627849054418025, '1': 0.7651252056296838}, 'confusion_matrix': [[16622, 710], [575, 2093]], 'num_classes': 2, 'num_samples': 20000, 'loss': 0.07822086189687252, 'positive_count': 2668, 'positive_rate': 0.1334}
+
+
+external_Wednesday_workingHour_w08
+[TEST] Full metrics: {'accuracy': 0.9583, 'macro_precision': 0.9086280358871877, 'macro_recall': 0.936906260906933, 'macro_f1': 0.9219982163966258, 'weighted_precision': 0.9602450089071224, 'weighted_recall': 0.9583, 'weighted_f1': 0.9589970878997421, 'precision_label1': 0.834391054699305, 'recall_label1': 0.9061371841155235, 'f1_label1': 0.868785399622404, 'auc': 0.9883564555230605, 'pr_auc': 0.9396812887460526, 'per_class_f1': {'0': 0.9752110331708477, '1': 0.868785399622404}, 'confusion_matrix': [[16405, 548], [286, 2761]], 'num_classes': 2, 'num_samples': 20000, 'loss': 0.06357301649544388, 'positive_count': 3047, 'positive_rate': 0.15235}
+
+firewall_test_20250731_160700这个数据集是公司提供的，但是从完全不同的服务器上后取得数据
+ar002_et12_20260511_001这个数据集用于训练和firewall_test_20250731_160700这个数据集用于外部测试,看运行结果
+external_firewall_test_20250731_160700
+[TEST] Full metrics: {'accuracy': 0.9882377379066809, 'macro_precision': 0.9251064091906098, 'macro_recall': 0.8824237903746113, 'macro_f1': 0.9025505661551252, 'weighted_precision': 0.9877813878411928, 'weighted_recall': 0.9882377379066809, 'weighted_f1': 0.9879269160785962, 'precision_label1': 0.8580246913580247, 'recall_label1': 0.7691699604743083, 'f1_label1': 0.81117132138391, 'auc': 0.9869553544748246, 'pr_auc': 0.8771333736541826, 'per_class_f1': {'0': 0.9939298109263404, '1': 0.81117132138391}, 'confusion_matrix': [[37087, 161], [292, 973]], 'num_classes': 2, 'num_samples': 38513, 'loss': 0.02039551498781868, 'positive_count': 1265, 'positive_rate': 0.032846051982447486}
+
+详细解析结果。

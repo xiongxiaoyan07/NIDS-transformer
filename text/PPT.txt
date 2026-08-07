@@ -1,0 +1,20 @@
+xxiong@cloud:~$ suricata -V
+This is Suricata version 8.0.0-dev (f26f7505d 2025-06-21)
+
+xxiong@cloud:~$ sudo suricata-update list-sources --enabled
+[sudo] password for xxiong:
+6/8/2026 -- 13:41:28 - <Info> -- Using data-directory /usr/local/var/lib/suricata.
+6/8/2026 -- 13:41:28 - <Info> -- Using Suricata configuration /usr/local/etc/suricata/suricata.yaml
+6/8/2026 -- 13:41:28 - <Info> -- Using /usr/local/share/suricata/rules for Suricata provided rules.
+6/8/2026 -- 13:41:28 - <Info> -- Found Suricata version 8.0.0-dev at /usr/local/bin/suricata.
+6/8/2026 -- 13:41:28 - <Warning> -- No enabled sources.
+
+
+针对于上面生成的PPT，我有一些需要修改的地方
+1、第二页中能不能加入一些图，能够更加直观的解释packet和flow
+2、Two research questions define the hierarchy。这里的RQ一定要是论文中的原话
+3、stage1和stage2属于不同stage的，一定要在标题中明确区分
+4、Average Precision - 统一改成PR-AUC
+5、CICIDS2017 列出positive占比
+6、每页PPT内容都很少，适量多家一点内容，每页的展示形式也要进行一定的变化，不要都是一个模式（图片、表格等多样化）
+7、每页演讲稿之间的衔接要自然。演讲稿的内容要详细化，解释要清晰。尽量演讲稿中的表达使用口语表达（我是一个外国人，使用我能熟练使用的词语，我英语没有那么好，表达也要流畅）
