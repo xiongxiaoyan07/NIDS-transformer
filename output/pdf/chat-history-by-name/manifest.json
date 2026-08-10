@@ -1,0 +1,93 @@
+[
+  {
+    "title": "Review open PRs",
+    "session_id": "019f2226-cb6a-7ad3-8378-8dcaf666fffe",
+    "messages": 38,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\02\\rollout-2026-07-02T11-26-35-019f2226-cb6a-7ad3-8378-8dcaf666fffe.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\Review open PRs.pdf"
+  },
+  {
+    "title": "记录我的idea",
+    "session_id": "019f223c-9782-7d11-a1b3-29646d23c4b9",
+    "messages": 20,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\02\\rollout-2026-07-02T11-50-24-019f223c-9782-7d11-a1b3-29646d23c4b9.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\记录我的idea.pdf"
+  },
+  {
+    "title": "记录想法",
+    "session_id": "019f2244-6a3e-7f51-853d-fa086f732b61",
+    "messages": 250,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\02\\rollout-2026-07-02T11-59-01-019f2244-6a3e-7f51-853d-fa086f732b61.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\记录想法.pdf"
+  },
+  {
+    "title": "分析 Stage2 结果",
+    "session_id": "019f3b5f-5533-7760-8231-bfe776cc71c3",
+    "messages": 256,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\07\\rollout-2026-07-07T08-58-57-019f3b5f-5533-7760-8231-bfe776cc71c3.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\分析 Stage2 结果.pdf"
+  },
+  {
+    "title": "解析 s2 代码",
+    "session_id": "019f461f-28ef-7b93-96d2-f67e52cae570",
+    "messages": 55,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\09\\rollout-2026-07-09T11-04-40-019f461f-28ef-7b93-96d2-f67e52cae570.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\解析 s2 代码.pdf"
+  },
+  {
+    "title": "梳理论文补充要求",
+    "session_id": "019f4b03-e09c-7110-a425-04e6d87dec5f",
+    "messages": 303,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\10\\rollout-2026-07-10T09-52-58-019f4b03-e09c-7110-a425-04e6d87dec5f.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\梳理论文补充要求.pdf"
+  },
+  {
+    "title": "修复 Stage2Dataset 参数错误",
+    "session_id": "019f6f18-06a4-7c80-9656-4eec3e99512a",
+    "messages": 4,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\17\\rollout-2026-07-17T10-01-18-019f6f18-06a4-7c80-9656-4eec3e99512a.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\修复 Stage2Dataset 参数错误.pdf"
+  },
+  {
+    "title": "run_stage1.py 运行结果详细解析",
+    "session_id": "019f8db3-bffc-7ff0-af5d-04a1d37d1d79",
+    "messages": 15,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\23\\rollout-2026-07-23T08-39-59-019f8db3-bffc-7ff0-af5d-04a1d37d1d79.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\run_stage1.py 运行结果详细解析.pdf"
+  },
+  {
+    "title": "抽取 Wednesday 流量与数据包外部测试集",
+    "session_id": "019fad06-3107-7fb2-a811-d5e06fc9dee3",
+    "messages": 13,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\07\\29\\rollout-2026-07-29T10-38-12-019fad06-3107-7fb2-a811-d5e06fc9dee3.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\抽取 Wednesday 流量与数据包外部测试集.pdf"
+  },
+  {
+    "title": "解析论文 LaTeX 与 Bib 引用",
+    "session_id": "019fd10e-8447-7f32-87b7-23e7f160e8dc",
+    "messages": 36,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\08\\05\\rollout-2026-08-05T10-33-37-019fd10e-8447-7f32-87b7-23e7f160e8dc.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\解析论文 LaTeX 与 Bib 引用.pdf"
+  },
+  {
+    "title": "审阅毕业论文LaTeX",
+    "session_id": "019fd71c-1225-7b73-819f-296e37bce246",
+    "messages": 42,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\08\\06\\rollout-2026-08-06T14-46-09-019fd71c-1225-7b73-819f-296e37bce246.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\审阅毕业论文LaTeX.pdf"
+  },
+  {
+    "title": "查找聊天记录下载方法",
+    "session_id": "019feb01-054a-7841-8354-18cfe630e6e4",
+    "messages": 22,
+    "source": "C:\\Users\\XiaoyanXiong\\.codex\\sessions\\2026\\08\\10\\rollout-2026-08-10T11-29-00-019feb01-054a-7841-8354-18cfe630e6e4.jsonl",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\查找聊天记录下载方法.pdf"
+  },
+  {
+    "title": "归档聊天功能解释",
+    "session_id": "6a797ff5-dc64-83ed-a178-31d70b82a312",
+    "messages": 10,
+    "source": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\tmp\\pdfs\\chatgpt_archived_thread.json",
+    "pdf": "C:\\Users\\XiaoyanXiong\\Desktop\\NIDSTransformer\\output\\pdf\\chat-history-by-name\\归档聊天功能解释.pdf"
+  }
+]
